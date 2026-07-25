@@ -2,7 +2,7 @@ import os
 import uuid as uuid_module
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
-from database import get_container
+from database import get_container, sign_url
 from models import Flipbook
 from utils import verify_api_key
 from services.flipbook_service import process_pdf_task, delete_single_flipbook
@@ -14,6 +14,16 @@ from fastapi.concurrency import run_in_threadpool
 router = APIRouter(tags=["Flipbooks"])
 
 STORAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage")
+
+
+def _sign_doc(doc: dict) -> dict:
+    """Cosmos 문서의 image_urls / pdf_url 필드에 SAS 서명을 적용한다."""
+    doc = dict(doc)
+    if doc.get("image_urls"):
+        doc["image_urls"] = [sign_url(u) for u in doc["image_urls"]]
+    if doc.get("pdf_url"):
+        doc["pdf_url"] = sign_url(doc["pdf_url"])
+    return doc
 
 
 def _read_flipbook_or_404(uuid_key: str) -> dict:
@@ -66,12 +76,12 @@ def list_flipbooks():
         query="SELECT * FROM c ORDER BY c.created_at DESC OFFSET 0 LIMIT 50",
         enable_cross_partition_query=True,
     )
-    return list(docs)
+    return [_sign_doc(doc) for doc in docs]
 
 
 @router.get("/flipbook/{uuid_key}")
 def get_flipbook(uuid_key: str):
-    return _read_flipbook_or_404(uuid_key)
+    return _sign_doc(_read_flipbook_or_404(uuid_key))
 
 
 @router.get("/flipbook/{uuid_key}/overlays")

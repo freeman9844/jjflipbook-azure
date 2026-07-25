@@ -54,7 +54,7 @@ resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-// ---------- Storage (공개 blob 컨테이너) ----------
+// ---------- Storage (프라이빗 컨테이너 — SAS URL로 접근) ----------
 resource storage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name: 'st${resourceToken}'
   location: location
@@ -62,7 +62,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   sku: { name: 'Standard_LRS' }
   kind: 'StorageV2'
   properties: {
-    allowBlobPublicAccess: true
+    allowBlobPublicAccess: false
     minimumTlsVersion: 'TLS1_2'
   }
 }
@@ -76,8 +76,7 @@ resource assetsContainer 'Microsoft.Storage/storageAccounts/blobServices/contain
   parent: blobService
   name: blobContainerName
   properties: {
-    // 'Container' = 익명 읽기 + 목록 조회 (music API의 blob list에 필요)
-    publicAccess: 'Container'
+    publicAccess: 'None'
   }
 }
 
@@ -262,8 +261,6 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
           resources: { cpu: json('0.5'), memory: '1Gi' }
           env: [
             { name: 'NEXT_PUBLIC_BACKEND_URL', value: backendUrl }
-            { name: 'STORAGE_ACCOUNT_NAME', value: storage.name }
-            { name: 'BLOB_CONTAINER_NAME', value: blobContainerName }
             { name: 'SESSION_SECRET', secretRef: 'session-secret' }
             { name: 'INTERNAL_API_KEY', secretRef: 'internal-api-key' }
           ]

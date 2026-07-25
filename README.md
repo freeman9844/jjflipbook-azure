@@ -12,7 +12,7 @@ PDF 문서를 업로드하여 웹 브라우저에서 실제 책을 넘기는 듯
 | **Frontend** | Next.js (standalone), react-pageflip — **Azure Container Apps** |
 | **Backend** | FastAPI (Python 3.11), poppler-utils, pdf2image — **Azure Container Apps** |
 | **Database** | **Azure Cosmos DB for NoSQL** (Serverless) — `users` / `folders` / `flipbooks` / `overlays` |
-| **Storage** | **Azure Blob Storage** 공개 컨테이너 `flipbook-assets` (페이지 이미지 · PDF · `bgm/` MP3) |
+| **Storage** | **Azure Blob Storage** 프라이빗 컨테이너 `flipbook-assets` (페이지 이미지 · PDF · `bgm/` MP3) — SAS URL로 접근 |
 | **Registry / 배포** | **ACR + azd (Azure Developer CLI) + Bicep** 원클릭 |
 | **인증(서비스 간)** | Managed Identity (Cosmos Data Contributor, Storage Blob Data Contributor) |
 
@@ -43,7 +43,7 @@ azd up     # 인프라 프로비저닝 + 빌드 + 배포
 | 변수 | 주입 대상 | 설명 |
 | --- | --- | --- |
 | `COSMOS_ENDPOINT` / `COSMOS_DB_NAME` | Backend | Cosmos DB 엔드포인트 / DB 이름(`jjflipbook`) |
-| `STORAGE_ACCOUNT_NAME` / `BLOB_CONTAINER_NAME` | Backend + Frontend | Blob 계정 / 컨테이너(`flipbook-assets`) |
+| `STORAGE_ACCOUNT_NAME` / `BLOB_CONTAINER_NAME` | Backend | Blob 계정 / 컨테이너(`flipbook-assets`) |
 | `NEXT_PUBLIC_BACKEND_URL` | Frontend (빌드 ARG) | 백엔드 엔드포인트 (정적 JS에 반영) |
 | `INTERNAL_API_KEY` | Backend + Frontend | FE → BE 내부 API 인증 키 (양쪽 동일) |
 | `ADMIN_PASSWORD` | Backend | 초기 관리자 계정 시딩 비밀번호 |
@@ -84,5 +84,5 @@ cd frontend && npx jest
   요청 타임아웃(약 240초)을 초과하는 대형 PDF는 클라이언트에서 타임아웃될 수 있습니다.
   (Cosmos에는 `processing` 상태로 남으며, 변환은 서버에서 계속 진행됩니다.)
 - **BGM 목록**: `flipbook-assets` 컨테이너의 `bgm/` 경로에 MP3를 업로드하면
-  뮤직 플레이어 목록에 자동 노출됩니다 (컨테이너 공개 접근 레벨 `Container` 필요 — Bicep이 설정).
+  뮤직 플레이어 목록에 자동 노출됩니다. 백엔드 `/music/list` 엔드포인트가 user-delegation SAS URL을 생성하여 반환합니다 (컨테이너 공개 접근 불필요).
 - GCP 시절 설계/플랜 문서는 `docs/` 아래에 참고용으로 보존되어 있습니다.
