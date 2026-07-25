@@ -16,6 +16,17 @@ from routers import auth, flipbooks, folders, music
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# Application Insights (OpenTelemetry) — 연결 문자열이 있을 때만 활성화 (로컬/테스트는 no-op)
+_APPINSIGHTS_ENABLED = bool(os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING"))
+if _APPINSIGHTS_ENABLED:
+    try:
+        from azure.monitor.opentelemetry import configure_azure_monitor
+        configure_azure_monitor()  # traces/metrics/logs → App Insights
+        logger.info("✅ Application Insights telemetry enabled.")
+    except Exception as e:  # 계측 실패가 앱 기동을 막지 않도록 방어
+        _APPINSIGHTS_ENABLED = False
+        logger.warning(f"⚠️ Application Insights setup failed (non-critical): {e}")
+
 
 async def _seed_admin():
     """startup 완료 후 백그라운드에서 admin 계정 seeding."""
@@ -51,6 +62,13 @@ app = FastAPI(
     version="0.3.0",
     lifespan=lifespan
 )
+
+if _APPINSIGHTS_ENABLED:
+    try:
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        FastAPIInstrumentor.instrument_app(app)
+    except Exception as e:
+        logger.warning(f"⚠️ FastAPI instrumentation failed (non-critical): {e}")
 
 frontend_url = os.getenv("FRONTEND_URL", os.getenv("NEXT_PUBLIC_FRONTEND_URL", "http://localhost:3000"))
 allowed_origins = [origin.strip() for origin in frontend_url.split(",")] if frontend_url else ["http://localhost:3000"]

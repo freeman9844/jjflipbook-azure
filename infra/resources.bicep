@@ -34,6 +34,17 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
   }
 }
 
+resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
+  name: 'appi-${resourceToken}'
+  location: location
+  tags: tags
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: logAnalytics.id
+  }
+}
+
 // ---------- Container Registry ----------
 resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   name: 'acr${resourceToken}'
@@ -234,6 +245,7 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'STORAGE_ACCOUNT_NAME', value: storage.name }
             { name: 'BLOB_CONTAINER_NAME', value: blobContainerName }
             { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
+            { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
             { name: 'ADMIN_PASSWORD', secretRef: 'admin-password' }
             { name: 'INTERNAL_API_KEY', secretRef: 'internal-api-key' }
             { name: 'FRONTEND_URL', value: frontendUrl }
