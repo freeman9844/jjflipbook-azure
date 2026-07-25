@@ -7,7 +7,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
-from database import get_db
+from database import get_container
 from models import User
 from utils import hash_password
 
@@ -20,16 +20,20 @@ logger = logging.getLogger(__name__)
 async def _seed_admin():
     """startup 완료 후 백그라운드에서 admin 계정 seeding."""
     import base64
+    from azure.cosmos.exceptions import CosmosResourceNotFoundError
     try:
-        user_ref = get_db().collection("users").document("admin")
-        if not user_ref.get().exists:
+        users = get_container("users")
+        try:
+            users.read_item(item="admin", partition_key="admin")
+        except CosmosResourceNotFoundError:
             fallback_pw = base64.b64decode(b"YWRtaW4=").decode("utf-8")
             admin_password = os.getenv("ADMIN_PASSWORD", fallback_pw)
             admin_user = User(
+                id="admin",
                 username="admin",
-                password_hash=hash_password(admin_password)
+                password_hash=hash_password(admin_password),
             )
-            user_ref.set(admin_user.model_dump())
+            users.create_item(admin_user.model_dump(mode="json"))
             logger.info("✅ [Lifespan] Default admin user seeded successfully.")
     except Exception as e:
         logger.warning(f"⚠️ [Lifespan] Admin seeding failed (non-critical): {e}")
@@ -42,8 +46,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Flipbook MVP API (Firestore)",
-    description="FastAPI Backend mapped for Cloud Firestore",
+    title="Flipbook MVP API (Cosmos DB)",
+    description="FastAPI Backend mapped for Cosmos DB",
     version="0.3.0",
     lifespan=lifespan
 )

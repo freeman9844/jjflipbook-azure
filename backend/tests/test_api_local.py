@@ -1,14 +1,12 @@
 import os
 import pytest
 from fastapi.testclient import TestClient
+from unittest.mock import patch, MagicMock
+from azure.cosmos.exceptions import CosmosResourceNotFoundError
+from utils import hash_password
 
-try:
-    from main import app
-    client = TestClient(app)
-except ImportError:
-    # main.py may fail to import during migration tasks
-    app = None
-    client = None
+from main import app
+client = TestClient(app)
 
 def test_local_health_check():
     """1. 헬스체크는 GCP 호출 없이 즉시 200을 반환해야 한다"""
@@ -18,24 +16,42 @@ def test_local_health_check():
     assert data.get("status") == "ok", "status 필드가 'ok' 여야 합니다"
     assert "services" not in data, "경량화된 헬스체크에 services 항목이 없어야 합니다"
 
-def test_local_login_failure():
-    """2. 인메모리 로그인 실패 (잘못된 비밀번호) 검증"""
+def _fake_users_container(password: str):
+    container = MagicMock()
+    container.read_item.return_value = {
+        "id": "admin",
+        "username": "admin",
+        "password_hash": hash_password(password),
+    }
+    return container
+
+
+@patch("routers.auth.get_container")
+def test_local_login_failure(mock_get_container):
+    """2. 로그인 실패 (잘못된 비밀번호) — Cosmos mock 검증"""
+    mock_get_container.return_value = _fake_users_container("correct_password")
     response = client.post("/login", json={"username": "admin", "password": "wrong_password"})
     assert response.status_code == 401, "잘못된 비밀번호에 대해 401 에러를 반환해야 합니다."
 
-import base64
 
-def test_local_login_success():
-    """3. 인메모리 로그인 성공 (관리자) 검증"""
-    # 깃허브 보안 진단(Hardcoded Credentials) 이슈를 해소하기 위해 
-    # 난독화(Base64)된 기본 비밀번호로 Fallback 처리합니다. ('admin' -> 'YWRtaW4=')
-    fallback_key = base64.b64decode(b"YWRtaW4=").decode("utf-8")
-    test_key = os.getenv("ADMIN_PASSWORD", fallback_key)
-    
-    response = client.post("/login", json={"username": "admin", "password": test_key})
+@patch("routers.auth.get_container")
+def test_local_login_success(mock_get_container):
+    """3. 로그인 성공 (관리자) — Cosmos mock 검증"""
+    mock_get_container.return_value = _fake_users_container("test_password")
+    response = client.post("/login", json={"username": "admin", "password": "test_password"})
     assert response.status_code == 200, "올바른 비밀번호에 대해 로그인이 실패했습니다."
     data = response.json()
-    assert data.get("authenticated") is True, "응답 JSON에 authenticated 키가 True 여야 합니다."
+    assert data.get("authenticated") is True
+
+
+@patch("routers.auth.get_container")
+def test_local_login_unknown_user(mock_get_container):
+    """3-1. 존재하지 않는 사용자 → 401 (Cosmos 404 매핑 검증)"""
+    container = MagicMock()
+    container.read_item.side_effect = CosmosResourceNotFoundError(status_code=404, message="not found")
+    mock_get_container.return_value = container
+    response = client.post("/login", json={"username": "ghost", "password": "x"})
+    assert response.status_code == 401
 
 def test_db_lazy_init_state():
     """5. database 모듈이 Azure 클라이언트 팩토리를 제공하는지 확인"""
@@ -43,9 +59,6 @@ def test_db_lazy_init_state():
     assert callable(database.get_container), "get_container 함수가 존재해야 합니다"
     assert callable(database.get_blob_container), "get_blob_container 함수가 존재해야 합니다"
     assert database.BLOB_BASE_URL.startswith("https://"), "BLOB_BASE_URL은 https URL이어야 합니다"
-
-
-from unittest.mock import patch, MagicMock
 
 @patch("routers.flipbooks.process_pdf_task")
 @patch("database.get_db")
