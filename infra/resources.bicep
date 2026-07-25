@@ -63,6 +63,8 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   kind: 'StorageV2'
   properties: {
     allowBlobPublicAccess: false
+    allowSharedKeyAccess: false // MI + User-Delegation SAS만 사용 — 계정 키 차단
+    supportsHttpsTrafficOnly: true
     minimumTlsVersion: 'TLS1_2'
   }
 }
@@ -70,6 +72,9 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
 resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-01-01' = {
   parent: storage
   name: 'default'
+  properties: {
+    deleteRetentionPolicy: { enabled: true, days: 7 } // 실수 삭제 복구 안전망
+  }
 }
 
 resource assetsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = {
@@ -107,6 +112,7 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
       { name: 'EnableServerless' }
     ]
     publicNetworkAccess: 'Enabled'
+    disableLocalAuth: true // AAD(Managed Identity) 인증만 허용 — 키 기반 접근 차단
   }
 }
 
@@ -166,7 +172,8 @@ resource cae 'Microsoft.App/managedEnvironments@2024-03-01' = {
 }
 
 // FE/BE 상호 URL은 앱 이름 + defaultDomain으로 결정적으로 계산 (순환 참조 없음)
-var backendUrl = 'https://${backendAppName}.${cae.properties.defaultDomain}'
+// 백엔드는 internal ingress — 같은 환경 내부에서만 접근 가능한 FQDN
+var backendUrl = 'https://${backendAppName}.internal.${cae.properties.defaultDomain}'
 var frontendUrl = 'https://${frontendAppName}.${cae.properties.defaultDomain}'
 var placeholderImage = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
@@ -182,7 +189,7 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
     managedEnvironmentId: cae.id
     configuration: {
       ingress: {
-        external: true
+        external: false // 프론트엔드 프록시만 접근 — 공용 인터넷 차단
         targetPort: 8080
         transport: 'auto'
       }
@@ -200,6 +207,27 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'backend'
           image: placeholderImage
           resources: { cpu: json('1.0'), memory: '2Gi' }
+          probes: [
+            {
+              type: 'Startup'
+              httpGet: { path: '/', port: 8080 }
+              initialDelaySeconds: 3
+              periodSeconds: 3
+              failureThreshold: 20
+            }
+            {
+              type: 'Liveness'
+              httpGet: { path: '/', port: 8080 }
+              periodSeconds: 30
+              failureThreshold: 3
+            }
+            {
+              type: 'Readiness'
+              httpGet: { path: '/', port: 8080 }
+              periodSeconds: 10
+              failureThreshold: 3
+            }
+          ]
           env: [
             { name: 'COSMOS_ENDPOINT', value: cosmosAccount.properties.documentEndpoint }
             { name: 'COSMOS_DB_NAME', value: cosmosDbName }
@@ -260,6 +288,27 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'frontend'
           image: placeholderImage
           resources: { cpu: json('0.5'), memory: '1Gi' }
+          probes: [
+            {
+              type: 'Startup'
+              httpGet: { path: '/', port: 3000 }
+              initialDelaySeconds: 3
+              periodSeconds: 3
+              failureThreshold: 20
+            }
+            {
+              type: 'Liveness'
+              httpGet: { path: '/', port: 3000 }
+              periodSeconds: 30
+              failureThreshold: 3
+            }
+            {
+              type: 'Readiness'
+              httpGet: { path: '/', port: 3000 }
+              periodSeconds: 10
+              failureThreshold: 3
+            }
+          ]
           env: [
             { name: 'NEXT_PUBLIC_BACKEND_URL', value: backendUrl }
             { name: 'SESSION_SECRET', secretRef: 'session-secret' }

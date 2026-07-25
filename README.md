@@ -185,9 +185,12 @@ cd frontend && npx jest
 
 ## 🔒 보안 설계
 
+- **백엔드 Internal Ingress**: 백엔드는 `external: false`로 Container Apps 환경 내부에서만 접근 가능 — 공용 인터넷에서 백엔드 API 직접 호출이 원천 차단됨
 - **프록시 릴레이**: 브라우저는 백엔드를 직접 호출하지 않고 Next.js `/api/backend/*` 프록시를 경유 — 쓰기 작업(업로드/삭제/오버레이 저장)은 프록시가 주입하는 `INTERNAL_API_KEY`(`X-API-Key`)를 백엔드가 재검증
 - **CORS 화이트리스트**: 백엔드는 Bicep이 계산한 `FRONTEND_URL` 단일 도메인만 허용
-- **비공개 Blob + SAS**: 컨테이너는 `publicAccess: None`. 모든 에셋 접근은 백엔드가 Managed Identity로 발급하는 **읽기 전용 User-Delegation SAS URL**(2시간 유효)로만 가능 — 계정 키를 코드/환경변수 어디에도 두지 않음
+- **비공개 Blob + SAS**: 컨테이너는 `publicAccess: None`. 모든 에셋 접근은 백엔드가 Managed Identity로 발급하는 **읽기 전용 User-Delegation SAS URL**(2시간 유효)로만 가능 — 계정 키 접근 자체가 비활성화됨(`allowSharedKeyAccess: false`)
+- **Cosmos AAD 전용 인증**: `disableLocalAuth: true`로 키 기반 접근 차단, Managed Identity(AAD)만 허용
+- **Blob Soft Delete(7일)**: 실수로 삭제된 Blob 복구 안전망
 - **Managed Identity 최소 권한**: Cosmos DB Built-in Data Contributor + Storage Blob Data Contributor를 해당 리소스 스코프로만 부여
 - **시크릿 관리**: `ADMIN_PASSWORD` / `INTERNAL_API_KEY` / `SESSION_SECRET`은 `azd env set` → Bicep `@secure()` 파라미터 → Container Apps secret으로 주입. 저장소에 하드코딩 없음
 - **패스워드 암호화**: bcrypt 해싱, `HttpOnly` 쿠키로 XSS 세션 탈취 차단
