@@ -195,6 +195,21 @@ cd frontend && npx jest
 - **시크릿 관리**: `ADMIN_PASSWORD` / `INTERNAL_API_KEY` / `SESSION_SECRET`은 `azd env set` → Bicep `@secure()` 파라미터 → Container Apps secret으로 주입. 저장소에 하드코딩 없음
 - **패스워드 암호화**: bcrypt 해싱, `HttpOnly` 쿠키로 XSS 세션 탈취 차단
 
+## 📊 관측성 (Application Insights)
+
+- 백엔드는 **Azure Monitor OpenTelemetry**(`azure-monitor-opentelemetry`)로 계측되어 있으며, `APPLICATIONINSIGHTS_CONNECTION_STRING` 환경변수가 있을 때만 활성화됩니다 (로컬/테스트에서는 no-op)
+- Bicep이 Log Analytics 워크스페이스 기반 **Application Insights**(`appi-*`)를 프로비저닝하고 연결 문자열을 백엔드 컨테이너에 자동 주입
+- FastAPI 요청 추적(`FastAPIInstrumentor`) + 의존성 호출(Cosmos/Blob) + 예외가 자동 수집됨 — Azure Portal의 Application Insights → Transaction Search / Failures에서 확인
+
+## 🔄 CI/CD (GitHub Actions)
+
+`azd pipeline config`로 구성된 `.github/workflows/azure-dev.yml`이 `main` 브랜치 push마다 `azd provision` + `azd deploy`를 실행합니다.
+
+- **인증**: Azure 관리 ID(`msi-jjflipbook-azure`) + GitHub OIDC **federated credentials** — 저장소에 클라이언트 시크릿 없음
+- **저장소 변수**: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_ENV_NAME`, `AZURE_LOCATION`
+- **저장소 시크릿**: `ADMIN_PASSWORD`, `INTERNAL_API_KEY`, `SESSION_SECRET` (Bicep `@secure()` 파라미터로 전달)
+- 참고: GitHub OIDC의 새 subject 형식(`repo:owner@id/repo@id:...`)을 사용하는 경우, 관리 ID에 해당 형식의 federated credential이 추가로 등록되어 있어야 합니다
+
 ## 📱 모바일 UX
 
 - **동적 뷰포트 스케일링**: `100dvh` + 상단 기준 스케일 다운으로 좁은 화면에서도 책과 UI 동시 노출
