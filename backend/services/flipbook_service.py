@@ -1,77 +1,110 @@
 import os
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from database import get_db, get_bucket, GCS_BUCKET_NAME
+from azure.cosmos.exceptions import CosmosResourceNotFoundError
+from azure.storage.blob import ContentSettings
+from database import get_container, get_blob_container, BLOB_BASE_URL
 
 logger = logging.getLogger(__name__)
 
+_CONTENT_TYPES = {
+    ".webp": "image/webp",
+    ".pdf": "application/pdf",
+    ".mp3": "audio/mpeg",
+}
+
+
+def _content_settings(filename: str) -> ContentSettings:
+    ext = os.path.splitext(filename)[1].lower()
+    return ContentSettings(content_type=_CONTENT_TYPES.get(ext, "application/octet-stream"))
+
 
 def delete_single_flipbook(uuid_key: str, date_str: str = ""):
-    db = get_db()
-    doc_ref = db.collection("flipbooks").document(uuid_key)
-
-    # 1. 서브 컬렉션 (Overlays) 삭제
-    overlays = doc_ref.collection("overlays").stream()
-    batch = db.batch()
-    for d in overlays:
-        batch.delete(d.reference)
-    batch.commit()
+    # 1. Overlays 삭제 (파티션 단위)
+    overlays = get_container("overlays")
+    overlay_ids = [
+        item["id"]
+        for item in overlays.query_items(
+            query="SELECT c.id FROM c", partition_key=uuid_key
+        )
+    ]
+    for oid in overlay_ids:
+        overlays.delete_item(item=oid, partition_key=uuid_key)
 
     # 2. 메인 플립북 문서 삭제
-    doc_ref.delete()
+    try:
+        get_container("flipbooks").delete_item(item=uuid_key, partition_key=uuid_key)
+    except CosmosResourceNotFoundError:
+        pass
 
-    # 3. GCS 블롭 소거 (Prefix 기반) - 멀티스레딩 병렬 삭제 적용
+    # 3. Blob 소거 (Prefix 기반) - 멀티스레딩 병렬 삭제 적용
     try:
         prefix_path = f"flipbooks/{date_str}/{uuid_key}/" if date_str else f"flipbooks/{uuid_key}/"
-        blobs = list(get_bucket().list_blobs(prefix=prefix_path))
+        container = get_blob_container()
+        blob_names = [b.name for b in container.list_blobs(name_starts_with=prefix_path)]
 
-        if blobs:
+        if blob_names:
             with ThreadPoolExecutor(max_workers=10) as executor:
-                list(executor.map(lambda b: b.delete(), blobs))
+                list(executor.map(lambda name: container.delete_blob(name), blob_names))
 
     except Exception as e:
-        logger.warning(f"⚠️ [Delete] GCS cleanup failed for book-{uuid_key}: {str(e)}")
+        logger.warning(f"⚠️ [Delete] Blob cleanup failed for book-{uuid_key}: {str(e)}")
 
 
 def process_pdf_task(pdf_path: str, book_storage: str, uuid_key: str, date_str: str, split_pages: bool = True):
-    """백그라운드에서 PDF를 이미지로 변환하고 GCS에 업로드 후 Firestore 업데이트."""
+    """백그라운드에서 PDF를 이미지로 변환하고 Blob Storage에 업로드 후 Cosmos 업데이트."""
     try:
         # pdf_utils는 실제 변환 시점에만 임포트 (cold start 임포트 오버헤드 제거)
         from pdf_utils import convert_pdf_to_images
         filenames = convert_pdf_to_images(pdf_path, book_storage, split_pages=split_pages)
 
-        bucket = get_bucket()
+        container = get_blob_container()
 
         def upload_worker(fname: str):
             local_path = os.path.join(book_storage, fname)
-            blob = bucket.blob(f"flipbooks/{date_str}/{uuid_key}/{fname}")
-            blob.upload_from_filename(local_path)
-            return f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/flipbooks/{date_str}/{uuid_key}/{fname}"
+            blob_name = f"flipbooks/{date_str}/{uuid_key}/{fname}"
+            with open(local_path, "rb") as f:
+                container.upload_blob(
+                    name=blob_name, data=f, overwrite=True,
+                    content_settings=_content_settings(fname),
+                )
+            return f"{BLOB_BASE_URL}/{blob_name}"
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             uploaded_urls = list(executor.map(upload_worker, filenames))
 
         pdf_blob_name = f"flipbooks/{date_str}/{uuid_key}/original.pdf" if date_str else f"flipbooks/{uuid_key}/original.pdf"
-        pdf_blob = bucket.blob(pdf_blob_name)
-        pdf_blob.upload_from_filename(pdf_path)
-        pdf_url = f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{pdf_blob_name}"
+        with open(pdf_path, "rb") as f:
+            container.upload_blob(
+                name=pdf_blob_name, data=f, overwrite=True,
+                content_settings=_content_settings("original.pdf"),
+            )
+        pdf_url = f"{BLOB_BASE_URL}/{pdf_blob_name}"
 
-        get_db().collection("flipbooks").document(uuid_key).update({
-            "page_count": len(filenames),
-            "image_urls": uploaded_urls,
-            "pdf_url": pdf_url,
-            "status": "success"
-        })
-        logger.info(f"✅ [Background] Flipbook-{uuid_key} Firestore Updated successfully. ({len(filenames)} pages)")
+        get_container("flipbooks").patch_item(
+            item=uuid_key,
+            partition_key=uuid_key,
+            patch_operations=[
+                {"op": "set", "path": "/page_count", "value": len(filenames)},
+                {"op": "set", "path": "/image_urls", "value": uploaded_urls},
+                {"op": "set", "path": "/pdf_url", "value": pdf_url},
+                {"op": "set", "path": "/status", "value": "success"},
+            ],
+        )
+        logger.info(f"✅ [Background] Flipbook-{uuid_key} Cosmos updated successfully. ({len(filenames)} pages)")
 
     except Exception as e:
         error_msg = str(e)
         logger.error(f"❌ [Background] Error processing PDF-{uuid_key}: {error_msg}", exc_info=True)
         try:
-            get_db().collection("flipbooks").document(uuid_key).update({
-                "status": "failed",
-                "error_message": error_msg
-            })
+            get_container("flipbooks").patch_item(
+                item=uuid_key,
+                partition_key=uuid_key,
+                patch_operations=[
+                    {"op": "set", "path": "/status", "value": "failed"},
+                    {"op": "set", "path": "/error_message", "value": error_msg},
+                ],
+            )
         except Exception as fe:
             logger.error(f"❌ [Background] Failed to update fail status for {uuid_key}: {str(fe)}")
     finally:
