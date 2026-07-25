@@ -18,7 +18,7 @@ param internalApiKey string
 @secure()
 param sessionSecret string
 
-var tags = { 'azd-env-name': environmentName }
+var tags = { 'azd-env-name': environmentName, SecurityControl: 'Ignore' }
 
 resource rg 'Microsoft.Resources/resourceGroups@2022-09-01' = {
   name: 'rg-${environmentName}'

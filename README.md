@@ -80,6 +80,19 @@ cd frontend && npx jest
 
 ## 알려진 제약
 
+### 테넌트 정책 관련 참고
+
+일부 테넌트(예: MCAPS Demo)에서는 관리 그룹 정책이 Cosmos DB의 `publicNetworkAccess`를 강제로 비활성화하거나
+Blob 컨테이너의 공개 접근을 차단할 수 있습니다. 이 저장소의 Bicep은 다음 두 가지 방식으로 이를 처리합니다:
+
+- **리소스 그룹 태그 `SecurityControl: Ignore`** — MCAPS 정책 예외 태그를 RG에 설정하여
+  `azd up` 후 Cosmos의 공개 네트워크 접근이 유지됩니다.
+- **SAS URL 기반 Blob 접근** — Blob 컨테이너는 의도적으로 비공개(`publicAccess: None`)이며,
+  모든 이미지·PDF·BGM 접근은 백엔드가 발급하는 User-Delegation SAS URL을 통해 이루어집니다
+  (컨테이너 공개 접근 불필요).
+
+또한 `azure.yaml`의 `remoteBuild: true` 설정 덕분에 **로컬 Docker 설치 없이** ACR이 빌드를 대신 수행합니다.
+
 - **긴 PDF 변환**: 업로드 요청이 변환을 동기 대기합니다. Container Apps ingress의
   요청 타임아웃(약 240초)을 초과하는 대형 PDF는 클라이언트에서 타임아웃될 수 있습니다.
   (Cosmos에는 `processing` 상태로 남으며, 변환은 서버에서 계속 진행됩니다.)

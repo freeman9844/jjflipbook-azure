@@ -94,7 +94,7 @@ def get_overlays(uuid_key: str):
 
 
 @router.post("/flipbook/{uuid_key}/overlays")
-def update_overlays(uuid_key: str, overlays: list[dict]):
+def update_overlays(uuid_key: str, overlays: list[dict], validated: bool = Depends(verify_api_key)):
     _read_flipbook_or_404(uuid_key)
     container = get_container("overlays")
 
