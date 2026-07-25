@@ -1,31 +1,28 @@
 import { NextResponse } from 'next/server';
 
-interface GcsObject {
-    name: string;
-}
-
-interface GcsListResponse {
-    items?: GcsObject[];
-}
-
 export async function GET() {
-    const bucketName = process.env.GCS_BUCKET_NAME || 'jjflipbook-gcs-001';
-    const bucketUrl = `https://storage.googleapis.com/storage/v1/b/${bucketName}/o?prefix=bgm/`;
+    const accountName = process.env.STORAGE_ACCOUNT_NAME || '';
+    const containerName = process.env.BLOB_CONTAINER_NAME || 'flipbook-assets';
+
+    if (!accountName) {
+        return NextResponse.json({ files: [] });
+    }
+
+    const baseUrl = `https://${accountName}.blob.core.windows.net/${containerName}`;
+    const listUrl = `${baseUrl}?restype=container&comp=list&prefix=bgm/`;
 
     try {
-        const res = await fetch(bucketUrl, { next: { revalidate: 3600 } });
+        const res = await fetch(listUrl, { next: { revalidate: 3600 } });
         if (!res.ok) {
             return NextResponse.json({ files: [] });
         }
 
-        const data: GcsListResponse = await res.json();
-        if (!data.items) {
-            return NextResponse.json({ files: [] });
-        }
+        const xml = await res.text();
+        const names = [...xml.matchAll(/<Name>([^<]+)<\/Name>/g)].map((m) => m[1]);
 
-        const files = data.items
-            .filter((item) => item.name.endsWith('.mp3'))
-            .map((item) => `https://storage.googleapis.com/${bucketName}/${item.name}`);
+        const files = names
+            .filter((name) => name.endsWith('.mp3'))
+            .map((name) => `${baseUrl}/${name}`);
 
         return NextResponse.json({ files });
     } catch {
