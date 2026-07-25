@@ -2,16 +2,14 @@ fastapi
 uvicorn
 python-multipart
 pdf2image
-google-auth
-google-auth-oauthlib
-google-auth-httplib2
-pyOpenSSL
 python-dotenv
 Pillow
-google-cloud-storage
-google-cloud-firestore
+azure-cosmos>=4.5.0
+azure-storage-blob>=12.19.0
+azure-identity>=1.15.0
 bcrypt>=3.2.0
 aiofiles>=23.2.1
 
 pytest>=8.0.0
 requests>=2.31.0
+httpx

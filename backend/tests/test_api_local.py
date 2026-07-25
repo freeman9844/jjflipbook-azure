@@ -33,10 +33,11 @@ def test_local_login_success():
     assert data.get("authenticated") is True, "응답 JSON에 authenticated 키가 True 여야 합니다."
 
 def test_db_lazy_init_state():
-    """5. database 모듈이 get_db/get_bucket 함수를 제공하는지 확인"""
+    """5. database 모듈이 Azure 클라이언트 팩토리를 제공하는지 확인"""
     import database
-    assert callable(database.get_db), "get_db 함수가 존재해야 합니다"
-    assert callable(database.get_bucket), "get_bucket 함수가 존재해야 합니다"
+    assert callable(database.get_container), "get_container 함수가 존재해야 합니다"
+    assert callable(database.get_blob_container), "get_blob_container 함수가 존재해야 합니다"
+    assert database.BLOB_BASE_URL.startswith("https://"), "BLOB_BASE_URL은 https URL이어야 합니다"
 
 
 from unittest.mock import patch, MagicMock
