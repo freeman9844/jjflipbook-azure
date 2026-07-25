@@ -11,11 +11,6 @@ BLOB_CONTAINER_NAME = os.getenv("BLOB_CONTAINER_NAME", "flipbook-assets")
 
 BLOB_BASE_URL = f"https://{STORAGE_ACCOUNT_NAME}.blob.core.windows.net/{BLOB_CONTAINER_NAME}"
 
-# Backward compatibility constants
-GCS_BUCKET_NAME = BLOB_CONTAINER_NAME
-GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "")
-FIRESTORE_DB_NAME = COSMOS_DB_NAME
-
 _lock = threading.Lock()
 _credential = None
 _cosmos_db = None
@@ -53,14 +48,4 @@ def get_blob_container() -> ContainerClient:
                     credential=_get_credential(),
                 )
     return _blob_container
-
-
-def get_db():
-    """Backward compatibility: Cosmos DB client (GCP Firestore migration stub)."""
-    return get_container("documents")
-
-
-def get_bucket():
-    """Backward compatibility: Blob container client (GCP Storage migration stub)."""
-    return get_blob_container()
 

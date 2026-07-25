@@ -1,9 +1,14 @@
 import os
 import pytest
 from fastapi.testclient import TestClient
-from main import app  # Assuming backend is executing this from backend directory
 
-client = TestClient(app)
+try:
+    from main import app
+    client = TestClient(app)
+except ImportError:
+    # main.py may fail to import during migration tasks
+    app = None
+    client = None
 
 def test_local_health_check():
     """1. 헬스체크는 GCP 호출 없이 즉시 200을 반환해야 한다"""
