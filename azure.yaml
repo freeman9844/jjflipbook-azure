@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+name: jjflipbook-azure
+services:
+  backend:
+    project: ./backend
+    language: py
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+  frontend:
+    project: ./frontend
+    language: js
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+      buildArgs:
+        - NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL}
