@@ -7,11 +7,13 @@ services:
     host: containerapp
     docker:
       path: ./Dockerfile
+      remoteBuild: true
   frontend:
     project: ./frontend
     language: js
     host: containerapp
     docker:
       path: ./Dockerfile
+      remoteBuild: true
       buildArgs:
         - NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL}
