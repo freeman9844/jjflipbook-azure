@@ -7,7 +7,7 @@ def utc_now():
     return datetime.now(timezone.utc)
 
 class User(BaseModel):
-    id: Optional[str] = None # Firestore Document ID
+    id: Optional[str] = None # Cosmos DB item ID
     username: str
     password_hash: str
     created_at: datetime = Field(default_factory=utc_now)
@@ -25,7 +25,7 @@ class Flipbook(BaseModel):
     user_id: str = "admin"
     page_count: int = 0
     created_at: datetime = Field(default_factory=utc_now)
-    # Firestore는 리스트(배열)를 직접 지원하므로 변경
+    # Cosmos DB는 리스트(배열)를 직접 지원하므로 변경
     image_urls: List[str] = [] 
     pdf_url: Optional[str] = None
 
