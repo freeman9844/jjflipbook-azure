@@ -61,15 +61,14 @@ def test_db_lazy_init_state():
     assert database.BLOB_BASE_URL.startswith("https://"), "BLOB_BASE_URL은 https URL이어야 합니다"
 
 @patch("routers.flipbooks.process_pdf_task")
-@patch("database.get_db")
-def test_local_pdf_upload(mock_get_db, mock_process):
-    """4. 인메모리 업로드 시나리오 (Firebase 연결 없이 라우팅 통과 여부 검증)"""
+@patch("routers.flipbooks.get_container")
+def test_local_pdf_upload(mock_get_container, mock_process):
+    """4. 인메모리 업로드 시나리오 (Azure 연결 없이 라우팅 통과 여부 검증)"""
     test_pdf_path = os.path.join(os.path.dirname(__file__), "test_data", "sample.pdf")
     assert os.path.exists(test_pdf_path), "Test data missing: sample.pdf"
 
-    mock_db = MagicMock()
-    mock_get_db.return_value = mock_db
-    mock_db.collection.return_value.document.return_value.set.return_value = None
+    mock_container = MagicMock()
+    mock_get_container.return_value = mock_container
 
     with open(test_pdf_path, "rb") as f:
         files = {"file": ("E2E_TEST_local_test.pdf", f, "application/pdf")}
@@ -78,3 +77,9 @@ def test_local_pdf_upload(mock_get_db, mock_process):
         assert response.status_code == 200, f"로컬 업로드 라우터 통과 실패: {response.text}"
         data = response.json()
         assert "book_id" in data
+
+    # Cosmos create_item에 전달된 문서 검증
+    created_doc = mock_container.create_item.call_args[0][0]
+    assert created_doc["id"] == created_doc["uuid_key"], "id는 uuid_key와 같아야 합니다"
+    assert created_doc["status"] == "processing"
+    assert isinstance(created_doc["created_at"], str), "created_at은 ISO 문자열이어야 합니다 (Cosmos 직렬화)"
