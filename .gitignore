@@ -1,0 +1,37 @@
+# Local Environment variables
+backend/.env
+backend/.env.*
+
+# Python caches & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+download_venv/
+backend/__pycache__/
+backend/venv/
+backend/.pytest_cache/
+
+# Node.js bundles & Next.js build output
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# Local databases & Storage
+backend/*.db
+backend/*.sqlite3
+backend/storage/
+
+# Test Data & Samples
+test_data/
+samples/
+
+# OS overhead & Editor configurations
+**/.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo.worktrees/
