@@ -8,7 +8,7 @@ export async function GET() {
     }
 
     try {
-        const res = await fetch(`${backendUrl}/music/list`, { next: { revalidate: 3600 } });
+        const res = await fetch(`${backendUrl}/music/list`, { next: { revalidate: 300 } });
         if (!res.ok) {
             return NextResponse.json({ files: [] });
         }
