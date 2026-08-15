@@ -1,23 +1,20 @@
 "use client";
 
-import React, { useEffect, useState, use, useRef } from 'react';
+import React, { use, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import {
+    EditableOverlay,
+    hydrateOverlays,
+    removeOverlay,
+    serializeOverlays,
+    updateOverlay,
+} from '@/lib/overlays';
 
 interface FlipbookData {
     uuid_key: string;
     title: string;
     page_count: number;
     image_urls: string[];
-}
-
-interface Overlay {
-    page: number;
-    type: string;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    data_url: string;
 }
 
 interface ModalData {
@@ -31,7 +28,7 @@ export default function FlipbookEditor({ params }: { params: Promise<{ bookId: s
     const router = useRouter();
 
     const [book, setBook] = useState<FlipbookData | null>(null);
-    const [overlays, setOverlays] = useState<Overlay[]>([]);
+    const [overlays, setOverlays] = useState<EditableOverlay[]>([]);
     const [activePage, setActivePage] = useState<number>(1);
     const [error, setError] = useState<string>("");
 
@@ -42,7 +39,7 @@ export default function FlipbookEditor({ params }: { params: Promise<{ bookId: s
     const workspaceRef = useRef<HTMLDivElement>(null);
 
     // 오버레이 모달 상태
-    const [selectedOverlayIndex, setSelectedOverlayIndex] = useState<number | null>(null);
+    const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
     const [modalData, setModalData] = useState<ModalData>({ type: 'link', data_url: '' });
 
     useEffect(() => {
@@ -55,8 +52,8 @@ export default function FlipbookEditor({ params }: { params: Promise<{ bookId: s
 
                 const overlayRes = await fetch(`/api/backend/flipbook/${bookId}/overlays`);
                 if (overlayRes.ok) {
-                    const overlayData: Overlay[] = await overlayRes.json();
-                    setOverlays(overlayData);
+                    const overlayData = await overlayRes.json();
+                    setOverlays(hydrateOverlays(overlayData));
                 }
             } catch (err) {
                 setError(err instanceof Error ? err.message : "알 수 없는 오류가 발생했습니다.");
@@ -94,25 +91,27 @@ export default function FlipbookEditor({ params }: { params: Promise<{ bookId: s
         const height = Math.abs(currentPos.y - startPos.y);
 
         if (width > 0.5 && height > 0.5) {
-            const newOverlay: Overlay = { page: activePage, type: 'link', x, y, width, height, data_url: '' };
-            const newOverlays = [...overlays, newOverlay];
-            setOverlays(newOverlays);
-            setSelectedOverlayIndex(newOverlays.length - 1);
+            const [newOverlay] = hydrateOverlays([{ page: activePage, type: 'link', x, y, width, height, data_url: '' }]);
+            setOverlays((prev) => [...prev, newOverlay]);
+            setSelectedOverlayId(newOverlay.clientId);
             setModalData({ type: 'link', data_url: '' });
         }
     };
 
     const handleSaveModal = () => {
-        if (selectedOverlayIndex === null) return;
-        setOverlays(prev => prev.map((o, i) =>
-            i === selectedOverlayIndex ? { ...o, type: modalData.type, data_url: modalData.data_url } : o
-        ));
-        setSelectedOverlayIndex(null);
+        if (selectedOverlayId === null) return;
+        setOverlays((prev) =>
+            updateOverlay(prev, selectedOverlayId, {
+                type: modalData.type,
+                data_url: modalData.data_url,
+            }),
+        );
+        setSelectedOverlayId(null);
     };
 
-    const handleOverlayDelete = (idx: number) => {
-        setOverlays(prev => prev.filter((_, i) => i !== idx));
-        setSelectedOverlayIndex(null);
+    const handleOverlayDelete = (clientId: string) => {
+        setOverlays((prev) => removeOverlay(prev, clientId));
+        setSelectedOverlayId(null);
     };
 
     const handleSaveChanges = async () => {
@@ -120,7 +119,7 @@ export default function FlipbookEditor({ params }: { params: Promise<{ bookId: s
             const res = await fetch(`/api/backend/flipbook/${bookId}/overlays`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(overlays),
+                body: JSON.stringify(serializeOverlays(overlays)),
             });
             if (res.ok) alert("🎉 설정 및 오버레이가 저장되었습니다.");
             else alert("❌ 저장 실패가 발생했습니다.");
@@ -169,9 +168,9 @@ export default function FlipbookEditor({ params }: { params: Promise<{ bookId: s
                                     style={styles.pageImage}
                                     draggable={false}
                                 />
-                                {overlays.filter(o => o.page === activePage).map((overlay, index) => (
+                                {overlays.filter((overlay) => overlay.page === activePage).map((overlay) => (
                                     <div
-                                        key={index}
+                                        key={overlay.clientId}
                                         style={{
                                             position: 'absolute',
                                             border: '2px solid #1a73e8',
@@ -185,7 +184,7 @@ export default function FlipbookEditor({ params }: { params: Promise<{ bookId: s
                                         }}
                                         onClick={(e) => {
                                             e.stopPropagation();
-                                            setSelectedOverlayIndex(index);
+                                            setSelectedOverlayId(overlay.clientId);
                                             setModalData({ type: overlay.type, data_url: overlay.data_url });
                                         }}
                                     />
@@ -224,7 +223,7 @@ export default function FlipbookEditor({ params }: { params: Promise<{ bookId: s
             </div>
 
             {/* 오버레이 편집 모달 */}
-            {selectedOverlayIndex !== null && (
+            {selectedOverlayId !== null && (
                 <div style={styles.modalBackdrop}>
                     <div style={styles.modalContent}>
                         <h3 style={styles.modalTitle}>오버레이 상세 설정</h3>
@@ -250,8 +249,8 @@ export default function FlipbookEditor({ params }: { params: Promise<{ bookId: s
                         </div>
                         <div style={styles.modalButtons}>
                             <button onClick={handleSaveModal} style={styles.primaryBtn}>승인</button>
-                            <button onClick={() => handleOverlayDelete(selectedOverlayIndex!)} style={styles.dangerBtn}>삭제</button>
-                            <button onClick={() => setSelectedOverlayIndex(null)} style={styles.cancelBtn}>취소</button>
+                            <button onClick={() => handleOverlayDelete(selectedOverlayId)} style={styles.dangerBtn}>삭제</button>
+                            <button onClick={() => setSelectedOverlayId(null)} style={styles.cancelBtn}>취소</button>
                         </div>
                     </div>
                 </div>
