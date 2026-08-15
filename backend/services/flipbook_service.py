@@ -1,10 +1,11 @@
 import os
 import logging
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 from azure.storage.blob import ContentSettings
 from database import get_container, get_blob_container, BLOB_BASE_URL
-from services.errors import PdfProcessingError
+from services.errors import PdfProcessingError, PDF_PROCESSING_FAILED_MESSAGE
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,11 @@ def delete_single_flipbook(uuid_key: str, date_str: str = ""):
                 list(executor.map(lambda name: container.delete_blob(name), blob_names))
 
     except Exception as e:
-        logger.warning(f"⚠️ [Delete] Blob cleanup failed for book-{uuid_key}: {str(e)}")
+        logger.warning(
+            "⚠️ [Delete] Blob cleanup failed for book-%s (%s)",
+            uuid_key,
+            e.__class__.__name__,
+        )
 
 
 def process_pdf_task(pdf_path: str, book_storage: str, uuid_key: str, date_str: str, split_pages: bool = True):
@@ -95,20 +100,32 @@ def process_pdf_task(pdf_path: str, book_storage: str, uuid_key: str, date_str: 
         logger.info(f"✅ [Background] Flipbook-{uuid_key} Cosmos updated successfully. ({len(filenames)} pages)")
 
     except Exception as e:
-        error_msg = str(e)
-        logger.error(f"❌ [Background] Error processing PDF-{uuid_key}: {error_msg}", exc_info=True)
+        logger.error(
+            "❌ [Background] Error processing PDF-%s (%s)",
+            uuid_key,
+            e.__class__.__name__,
+        )
+        logger.error(
+            "❌ [Background] PDF-%s traceback:\n%s",
+            uuid_key,
+            "".join(traceback.format_tb(e.__traceback__)),
+        )
         try:
             get_container("flipbooks").patch_item(
                 item=uuid_key,
                 partition_key=uuid_key,
                 patch_operations=[
                     {"op": "set", "path": "/status", "value": "failed"},
-                    {"op": "set", "path": "/error_message", "value": error_msg},
+                    {"op": "set", "path": "/error_message", "value": PDF_PROCESSING_FAILED_MESSAGE},
                 ],
             )
         except Exception as fe:
-            logger.error(f"❌ [Background] Failed to update fail status for {uuid_key}: {str(fe)}")
-        raise PdfProcessingError("PDF processing failed") from e
+            logger.error(
+                "❌ [Background] Failed to update fail status for %s (%s)",
+                uuid_key,
+                fe.__class__.__name__,
+            )
+        raise PdfProcessingError(PDF_PROCESSING_FAILED_MESSAGE) from e
     finally:
         import shutil
         if os.path.exists(book_storage):

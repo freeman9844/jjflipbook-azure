@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 from utils import hash_password
-from services.errors import PdfProcessingError
+from services.errors import PdfProcessingError, PDF_PROCESSING_FAILED_MESSAGE
 
 from main import app
 client = TestClient(app)
@@ -87,7 +87,7 @@ def test_local_pdf_upload(mock_get_container, mock_process):
 
 @patch(
     "routers.flipbooks.process_pdf_task",
-    side_effect=PdfProcessingError("PDF processing failed"),
+    side_effect=PdfProcessingError(PDF_PROCESSING_FAILED_MESSAGE),
 )
 @patch("routers.flipbooks.get_container")
 def test_upload_returns_error_when_processing_fails(mock_get_container, _process):
@@ -101,4 +101,42 @@ def test_upload_returns_error_when_processing_fails(mock_get_container, _process
         )
 
     assert response.status_code == 500
-    assert response.json() == {"detail": "PDF processing failed"}
+    assert response.json() == {"detail": PDF_PROCESSING_FAILED_MESSAGE}
+
+
+@patch("routers.flipbooks.get_container")
+def test_list_flipbooks_redacts_error_message(mock_get_container):
+    mock_container = MagicMock()
+    mock_container.query_items.return_value = [
+        {
+            "id": "book-1",
+            "status": "failed",
+            "error_message": "raw exception text with token secret-123",
+        }
+    ]
+    mock_get_container.return_value = mock_container
+
+    response = client.get("/flipbooks")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data == [{"id": "book-1", "status": "failed"}]
+    assert "raw exception text with token secret-123" not in response.text
+
+
+@patch("routers.flipbooks.get_container")
+def test_get_flipbook_redacts_error_message(mock_get_container):
+    mock_container = MagicMock()
+    mock_container.read_item.return_value = {
+        "id": "book-2",
+        "status": "failed",
+        "error_message": "raw exception text with signed-url token",
+    }
+    mock_get_container.return_value = mock_container
+
+    response = client.get("/flipbook/book-2")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data == {"id": "book-2", "status": "failed"}
+    assert "raw exception text with signed-url token" not in response.text

@@ -6,7 +6,7 @@ from database import get_container, sign_url
 from models import Flipbook
 from utils import verify_api_key
 from services.flipbook_service import process_pdf_task, delete_single_flipbook
-from services.errors import PdfProcessingError
+from services.errors import PdfProcessingError, PDF_PROCESSING_FAILED_MESSAGE
 import aiofiles
 from datetime import datetime, timezone
 
@@ -20,6 +20,7 @@ STORAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 def _sign_doc(doc: dict) -> dict:
     """Cosmos 문서의 image_urls / pdf_url 필드에 SAS 서명을 적용한다."""
     doc = dict(doc)
+    doc.pop("error_message", None)
     if doc.get("image_urls"):
         doc["image_urls"] = [sign_url(u) for u in doc["image_urls"]]
     if doc.get("pdf_url"):
@@ -65,7 +66,7 @@ async def upload_pdf(
     try:
         await run_in_threadpool(process_pdf_task, pdf_path, book_dir, book.uuid_key, date_str, split_pages)
     except PdfProcessingError as exc:
-        raise HTTPException(status_code=500, detail="PDF processing failed") from exc
+        raise HTTPException(status_code=500, detail=PDF_PROCESSING_FAILED_MESSAGE) from exc
 
     return {
         "status": "ok",

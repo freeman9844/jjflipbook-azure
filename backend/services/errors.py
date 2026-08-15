@@ -1,3 +1,6 @@
+PDF_PROCESSING_FAILED_MESSAGE = "PDF processing failed"
+
+
 class PdfProcessingError(RuntimeError):
     pass
 
