@@ -17,8 +17,14 @@ var blobContainerName = 'flipbook-assets'
 var cosmosDbName = 'jjflipbook'
 
 // ---------- Identity ----------
-resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: 'id-${resourceToken}'
+resource backendIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'id-backend-${resourceToken}'
+  location: location
+  tags: tags
+}
+
+resource frontendIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'id-frontend-${resourceToken}'
   location: location
   tags: tags
 }
@@ -54,13 +60,24 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   properties: { adminUserEnabled: false }
 }
 
-resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource backendAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: acr
-  name: guid(acr.id, identity.id, 'acrpull')
+  name: guid(acr.id, backendIdentity.id, 'acrpull')
   properties: {
     // AcrPull
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
-    principalId: identity.properties.principalId
+    principalId: backendIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource frontendAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: acr
+  name: guid(acr.id, frontendIdentity.id, 'acrpull')
+  properties: {
+    // AcrPull
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+    principalId: frontendIdentity.properties.principalId
     principalType: 'ServicePrincipal'
   }
 }
@@ -98,11 +115,11 @@ resource assetsContainer 'Microsoft.Storage/storageAccounts/blobServices/contain
 
 resource blobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: storage
-  name: guid(storage.id, identity.id, 'blobcontrib')
+  name: guid(storage.id, backendIdentity.id, 'blobcontrib')
   properties: {
     // Storage Blob Data Contributor
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-    principalId: identity.properties.principalId
+    principalId: backendIdentity.properties.principalId
     principalType: 'ServicePrincipal'
   }
 }
@@ -157,11 +174,11 @@ resource containers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containe
 
 resource cosmosDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-05-15' = {
   parent: cosmosAccount
-  name: guid(cosmosAccount.id, identity.id, 'datacontrib')
+  name: guid(cosmosAccount.id, backendIdentity.id, 'datacontrib')
   properties: {
     // Cosmos DB Built-in Data Contributor
     roleDefinitionId: '${cosmosAccount.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
-    principalId: identity.properties.principalId
+    principalId: backendIdentity.properties.principalId
     scope: cosmosAccount.id
   }
 }
@@ -194,7 +211,7 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
   tags: union(tags, { 'azd-service-name': 'backend' })
   identity: {
     type: 'UserAssigned'
-    userAssignedIdentities: { '${identity.id}': {} }
+    userAssignedIdentities: { '${backendIdentity.id}': {} }
   }
   properties: {
     managedEnvironmentId: cae.id
@@ -205,7 +222,7 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
         transport: 'auto'
       }
       registries: [
-        { server: acr.properties.loginServer, identity: identity.id }
+        { server: acr.properties.loginServer, identity: backendIdentity.id }
       ]
       secrets: [
         { name: 'admin-password', value: adminPassword }
@@ -240,11 +257,12 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
             }
           ]
           env: [
+            { name: 'APP_ENV', value: 'production' }
             { name: 'COSMOS_ENDPOINT', value: cosmosAccount.properties.documentEndpoint }
             { name: 'COSMOS_DB_NAME', value: cosmosDbName }
             { name: 'STORAGE_ACCOUNT_NAME', value: storage.name }
             { name: 'BLOB_CONTAINER_NAME', value: blobContainerName }
-            { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
+            { name: 'AZURE_CLIENT_ID', value: backendIdentity.properties.clientId }
             { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
             { name: 'ADMIN_PASSWORD', secretRef: 'admin-password' }
             { name: 'INTERNAL_API_KEY', secretRef: 'internal-api-key' }
@@ -267,7 +285,7 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
       }
     }
   }
-  dependsOn: [acrPull, blobContributor, cosmosDataContributor]
+  dependsOn: [backendAcrPull, blobContributor, cosmosDataContributor]
 }
 
 resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
@@ -276,7 +294,7 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
   tags: union(tags, { 'azd-service-name': 'frontend' })
   identity: {
     type: 'UserAssigned'
-    userAssignedIdentities: { '${identity.id}': {} }
+    userAssignedIdentities: { '${frontendIdentity.id}': {} }
   }
   properties: {
     managedEnvironmentId: cae.id
@@ -287,7 +305,7 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
         transport: 'auto'
       }
       registries: [
-        { server: acr.properties.loginServer, identity: identity.id }
+        { server: acr.properties.loginServer, identity: frontendIdentity.id }
       ]
       secrets: [
         { name: 'session-secret', value: sessionSecret }
@@ -334,7 +352,7 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
       }
     }
   }
-  dependsOn: [acrPull]
+  dependsOn: [frontendAcrPull]
 }
 
 output acrLoginServer string = acr.properties.loginServer

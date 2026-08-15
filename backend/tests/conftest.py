@@ -6,6 +6,8 @@ import os
 import shutil
 import pytest
 
+os.environ.setdefault("APP_ENV", "test")
+
 TEST_DATA_DIR = os.path.join(os.path.dirname(__file__), "test_data")
 SAMPLE_PDF = os.path.join(TEST_DATA_DIR, "sample.pdf")
 

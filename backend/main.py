@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 
 from database import get_container
 from models import User
-from utils import hash_password
+from utils import hash_password, required_setting, validate_runtime_config
 
 from routers import auth, flipbooks, folders, music
 
@@ -30,15 +30,13 @@ if _APPINSIGHTS_ENABLED:
 
 async def _seed_admin():
     """startup 완료 후 백그라운드에서 admin 계정 seeding."""
-    import base64
     from azure.cosmos.exceptions import CosmosResourceNotFoundError
     try:
         users = get_container("users")
         try:
             users.read_item(item="admin", partition_key="admin")
         except CosmosResourceNotFoundError:
-            fallback_pw = base64.b64decode(b"YWRtaW4=").decode("utf-8")
-            admin_password = os.getenv("ADMIN_PASSWORD", fallback_pw)
+            admin_password = required_setting("ADMIN_PASSWORD", "admin")
             admin_user = User(
                 id="admin",
                 username="admin",
@@ -52,6 +50,7 @@ async def _seed_admin():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_runtime_config()
     asyncio.create_task(_seed_admin())
     yield
 
