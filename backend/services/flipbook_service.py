@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 from azure.storage.blob import ContentSettings
 from database import get_container, get_blob_container, BLOB_BASE_URL
+from services.errors import PdfProcessingError
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,7 @@ def process_pdf_task(pdf_path: str, book_storage: str, uuid_key: str, date_str: 
             )
         except Exception as fe:
             logger.error(f"❌ [Background] Failed to update fail status for {uuid_key}: {str(fe)}")
+        raise PdfProcessingError("PDF processing failed") from e
     finally:
         import shutil
         if os.path.exists(book_storage):

@@ -1,9 +1,9 @@
 import os
-import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 from utils import hash_password
+from services.errors import PdfProcessingError
 
 from main import app
 client = TestClient(app)
@@ -83,3 +83,22 @@ def test_local_pdf_upload(mock_get_container, mock_process):
     assert created_doc["id"] == created_doc["uuid_key"], "id는 uuid_key와 같아야 합니다"
     assert created_doc["status"] == "processing"
     assert isinstance(created_doc["created_at"], str), "created_at은 ISO 문자열이어야 합니다 (Cosmos 직렬화)"
+
+
+@patch(
+    "routers.flipbooks.process_pdf_task",
+    side_effect=PdfProcessingError("PDF processing failed"),
+)
+@patch("routers.flipbooks.get_container")
+def test_upload_returns_error_when_processing_fails(mock_get_container, _process):
+    mock_get_container.return_value = MagicMock()
+    test_pdf_path = os.path.join(os.path.dirname(__file__), "test_data", "sample.pdf")
+    with open(test_pdf_path, "rb") as file:
+        response = client.post(
+            "/upload",
+            files={"file": ("failed.pdf", file, "application/pdf")},
+            headers={"x-api-key": "secret_dev_key"},
+        )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "PDF processing failed"}

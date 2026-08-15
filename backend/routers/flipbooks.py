@@ -6,6 +6,7 @@ from database import get_container, sign_url
 from models import Flipbook
 from utils import verify_api_key
 from services.flipbook_service import process_pdf_task, delete_single_flipbook
+from services.errors import PdfProcessingError
 import aiofiles
 from datetime import datetime, timezone
 
@@ -61,7 +62,10 @@ async def upload_pdf(
             await f.write(chunk)
 
     # 응답 전에 변환을 완료해야 하므로 쓰레드풀에서 동기 대기
-    await run_in_threadpool(process_pdf_task, pdf_path, book_dir, book.uuid_key, date_str, split_pages)
+    try:
+        await run_in_threadpool(process_pdf_task, pdf_path, book_dir, book.uuid_key, date_str, split_pages)
+    except PdfProcessingError as exc:
+        raise HTTPException(status_code=500, detail="PDF processing failed") from exc
 
     return {
         "status": "ok",
