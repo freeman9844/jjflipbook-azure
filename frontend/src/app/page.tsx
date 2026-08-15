@@ -6,9 +6,11 @@ import FolderCard, { type Folder } from '@/components/FolderCard';
 import FlipbookCard, { type Flipbook } from '@/components/FlipbookCard';
 import ConfirmModal from '@/components/ConfirmModal';
 import CreateFolderModal from '@/components/CreateFolderModal';
+import { useAuth } from '@/components/AuthGuard';
 
 export default function Home() {
     const router = useRouter();
+    const { logout } = useAuth();
 
     const [books, setBooks] = useState<Flipbook[]>([]);
     const [folders, setFolders] = useState<Folder[]>([]);
@@ -58,8 +60,6 @@ export default function Home() {
             ]);
 
             if (booksRes.status === 401 || foldersRes.status === 401) {
-                // AuthGuard가 로그인 화면으로 전환하므로 localStorage만 정리
-                localStorage.removeItem("isAuthenticated");
                 return;
             }
 
@@ -210,10 +210,11 @@ export default function Home() {
     }, [deletingUuid]);
 
     const handleLogout = useCallback(async () => {
-        await fetch('/api/backend/logout', { method: 'POST' });
-        localStorage.removeItem("isAuthenticated");
-        router.refresh();
-    }, [router]);
+        const res = await fetch('/api/backend/logout', { method: 'POST' });
+        if (res.ok) {
+            logout();
+        }
+    }, [logout]);
 
     const filteredBooks = books.filter(b => (b.folder_id || null) === currentFolderId);
 

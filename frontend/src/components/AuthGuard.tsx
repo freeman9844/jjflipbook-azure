@@ -1,7 +1,27 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import {
+    useCallback,
+    createContext,
+    useContext,
+    useEffect,
+    useMemo,
+    useState,
+} from "react";
 import { usePathname } from "next/navigation";
+
+interface SessionResponse {
+    authenticated: boolean;
+    username: string;
+    expiresAt: number;
+}
+
+interface AuthContextValue {
+    logout: () => void;
+}
+
+const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+const FALLBACK_SESSION_TTL_SECONDS = 8 * 60 * 60;
 
 const styles: Record<string, React.CSSProperties> = {
     loginContainer: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', width: '100vw', backgroundColor: '#f4f6f8' },
@@ -10,19 +30,93 @@ const styles: Record<string, React.CSSProperties> = {
     loginBtn: { padding: '12px', backgroundColor: '#1a73e8', color: 'white', border: 'none', borderRadius: '8px', fontSize: '15px', fontWeight: 600, cursor: 'pointer', transition: 'background-color 0.2s', marginTop: '8px', width: '100%' }
 };
 
+export function useAuth(): AuthContextValue {
+    const value = useContext(AuthContext);
+    if (!value) {
+        throw new Error('useAuth must be used within AuthGuard');
+    }
+    return value;
+}
+
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
     const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
+    const [sessionExpiresAt, setSessionExpiresAt] = useState<number | null>(null);
     const [loginId, setLoginId] = useState("");
     const [password, setPassword] = useState("");
     const [loginError, setLoginError] = useState("");
     const pathname = usePathname();
+    const isPublicRoute = pathname?.startsWith("/view/") || false;
+    const authValue = useMemo<AuthContextValue>(() => ({
+        logout: () => {
+            setSessionExpiresAt(null);
+            setIsLoggedIn(false);
+        },
+    }), []);
+
+    const applySession = useCallback((session: SessionResponse) => {
+        setSessionExpiresAt(session.expiresAt);
+        setIsLoggedIn(true);
+    }, []);
+
+    const validateSession = useCallback(async (failClosed: boolean) => {
+        try {
+            const res = await fetch('/api/backend/session', {
+                cache: 'no-store',
+            });
+
+            if (!res.ok) {
+                if (failClosed) {
+                    setSessionExpiresAt(null);
+                    setIsLoggedIn(false);
+                }
+                return;
+            }
+
+            const data = await res.json() as SessionResponse;
+            if (!data.authenticated) {
+                if (failClosed) {
+                    setSessionExpiresAt(null);
+                    setIsLoggedIn(false);
+                }
+                return;
+            }
+
+            applySession(data);
+        } catch {
+            if (failClosed) {
+                setSessionExpiresAt(null);
+                setIsLoggedIn(false);
+            }
+        }
+    }, [applySession]);
 
     useEffect(() => {
-        if (typeof window !== "undefined") {
-            const auth = localStorage.getItem("isAuthenticated");
-            setIsLoggedIn(auth === "true");
+        if (isPublicRoute) {
+            return;
         }
-    }, []);
+
+        void validateSession(true);
+    }, [isPublicRoute, validateSession]);
+
+    useEffect(() => {
+        if (!sessionExpiresAt) {
+            return;
+        }
+
+        const delay = sessionExpiresAt * 1000 - Date.now();
+        if (delay <= 0) {
+            setSessionExpiresAt(null);
+            setIsLoggedIn(false);
+            return;
+        }
+
+        const logoutTimer = setTimeout(() => {
+            setSessionExpiresAt(null);
+            setIsLoggedIn(false);
+        }, delay);
+
+        return () => clearTimeout(logoutTimer);
+    }, [sessionExpiresAt]);
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -34,16 +128,29 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
             });
 
             if (res.ok) {
-                localStorage.setItem("isAuthenticated", "true");
+                setSessionExpiresAt(
+                    Math.floor(Date.now() / 1000) + FALLBACK_SESSION_TTL_SECONDS,
+                );
                 setIsLoggedIn(true);
                 setLoginError("");
+                void validateSession(false);
             } else {
+                setSessionExpiresAt(null);
                 setLoginError("❌ ID 또는 Password가 잘못되었습니다.");
             }
         } catch (err) {
+            setSessionExpiresAt(null);
             setLoginError("❌ 서버와 통신할 수 없습니다.");
         }
     };
+
+    if (isPublicRoute) {
+        return (
+            <AuthContext.Provider value={authValue}>
+                {children}
+            </AuthContext.Provider>
+        );
+    }
 
     if (isLoggedIn === null) {
         return (
@@ -52,8 +159,6 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
             </div>
         );
     }
-
-    const isPublicRoute = pathname?.startsWith("/view/") || false;
 
     if (!isLoggedIn && !isPublicRoute) {
         return (
@@ -70,6 +175,9 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
         );
     }
 
-    return <>{children}</>;
+    return (
+        <AuthContext.Provider value={authValue}>
+            {children}
+        </AuthContext.Provider>
+    );
 }
-

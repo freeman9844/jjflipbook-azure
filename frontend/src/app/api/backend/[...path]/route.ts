@@ -1,13 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+    createSessionToken,
+    SESSION_TTL_SECONDS,
+    verifySessionToken,
+} from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
-const SESSION_TOKEN = process.env.SESSION_SECRET || "simple-mvp-session-secret-123";
+function backendUrl(): string {
+    return process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+}
 
-function isAuthenticated(request: NextRequest) {
-    const token = request.cookies.get('auth_token')?.value;
-    return token === SESSION_TOKEN;
+function internalApiKey(): string {
+    const value = process.env.INTERNAL_API_KEY;
+    if (process.env.NODE_ENV === 'production' && (!value || value === 'secret_dev_key')) {
+        throw new Error('INTERNAL_API_KEY must be configured');
+    }
+    return value || 'secret_dev_key';
+}
+
+function sessionFor(request: NextRequest) {
+    return verifySessionToken(request.cookies.get('auth_token')?.value);
 }
 
 // GET Proxy
@@ -18,16 +31,28 @@ export async function GET(
     const resolvedParams = await params;
     const pathStr = resolvedParams.path.join('/');
 
+    if (pathStr === 'session') {
+        const session = sessionFor(request);
+        if (!session) {
+            return NextResponse.json({ authenticated: false }, { status: 401 });
+        }
+        return NextResponse.json({
+            authenticated: true,
+            username: session.username,
+            expiresAt: session.exp,
+        });
+    }
+
     // /folders, /flipbooks (대시보드 목록)는 인증 필요
     // /flipbook/:uuid, /flipbook/:uuid/overlays는 공개 접근 허용 (뷰어 공유용)
     if (pathStr === 'folders' || pathStr === 'flipbooks') {
-        if (!isAuthenticated(request)) {
+        if (!sessionFor(request)) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
     }
 
     const searchParams = request.nextUrl.search;
-    const url = `${BACKEND_URL}/${pathStr}${searchParams}`;
+    const url = `${backendUrl()}/${pathStr}${searchParams}`;
 
     try {
         const res = await fetch(url, { cache: 'no-store' });
@@ -50,7 +75,6 @@ export async function POST(
     const resolvedParams = await params;
     const pathStr = resolvedParams.path.join('/');
     const searchParams = request.nextUrl.search;
-    const url = `${BACKEND_URL}/${pathStr}${searchParams}`;
 
     // 로그아웃은 프론트엔드에서만 처리 (쿠키 삭제)
     if (pathStr === 'logout') {
@@ -60,18 +84,18 @@ export async function POST(
     }
 
     // 로그인 외 모든 POST는 인증 필요
-    if (pathStr !== 'login' && !isAuthenticated(request)) {
+    if (pathStr !== 'login' && !sessionFor(request)) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     try {
         const contentType = request.headers.get('content-type') || 'application/json';
-        const apiKey = process.env.INTERNAL_API_KEY || 'secret_dev_key';
+        const apiKey = internalApiKey();
 
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 600000); // 10분 타임아웃
 
-        const res = await fetch(url, {
+        const res = await fetch(`${backendUrl()}/${pathStr}${searchParams}`, {
             method: 'POST',
             body: request.body,
             headers: {
@@ -94,11 +118,19 @@ export async function POST(
 
         // 로그인 성공 시 HttpOnly 쿠키 발급
         if (pathStr === 'login' && res.ok && data.authenticated) {
-            resObj.cookies.set('auth_token', SESSION_TOKEN, {
+            const token = createSessionToken(data.username);
+            const session = verifySessionToken(token);
+            if (!session) {
+                throw new Error('Failed to create session');
+            }
+
+            resObj.cookies.set('auth_token', token, {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === 'production',
                 sameSite: 'lax',
                 path: '/',
+                maxAge: SESSION_TTL_SECONDS,
+                expires: new Date(session.exp * 1000),
             });
         }
 
@@ -114,19 +146,19 @@ export async function DELETE(
     request: NextRequest,
     { params }: { params: Promise<{ path: string[] }> }
 ) {
-    if (!isAuthenticated(request)) {
+    if (!sessionFor(request)) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const resolvedParams = await params;
     const pathStr = resolvedParams.path.join('/');
     const searchParams = request.nextUrl.search;
-    const url = `${BACKEND_URL}/${pathStr}${searchParams}`;
+    const url = `${backendUrl()}/${pathStr}${searchParams}`;
 
     try {
         const res = await fetch(url, {
             method: 'DELETE',
-            headers: { 'X-API-Key': process.env.INTERNAL_API_KEY || 'secret_dev_key' },
+            headers: { 'X-API-Key': internalApiKey() },
         });
         const responseContentType = res.headers.get('content-type') || '';
         const data = responseContentType.includes('application/json')

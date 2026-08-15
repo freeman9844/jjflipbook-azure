@@ -56,9 +56,29 @@ export default function FlipbookViewer({ params }: { params: Promise<{ uuidKey: 
     }, []);
 
     useEffect(() => {
-        if (typeof window !== "undefined") {
-            setIsAdmin(localStorage.getItem("isAuthenticated") === "true");
-        }
+        let isActive = true;
+
+        const fetchSession = async () => {
+            try {
+                const res = await fetch('/api/backend/session', {
+                    cache: 'no-store',
+                });
+                if (!res.ok) return;
+
+                const data = await res.json() as { authenticated: boolean };
+                if (isActive) {
+                    setIsAdmin(data.authenticated);
+                }
+            } catch {
+                // 공개 뷰어에서는 관리자 세션 확인 실패를 무시
+            }
+        };
+
+        void fetchSession();
+
+        return () => {
+            isActive = false;
+        };
     }, []);
 
     // 키보드 화살표 네비게이션
