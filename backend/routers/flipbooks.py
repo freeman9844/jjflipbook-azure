@@ -6,7 +6,11 @@ from database import get_container, sign_url
 from models import Flipbook
 from utils import verify_api_key
 from services.flipbook_service import process_pdf_task, delete_single_flipbook
-from services.errors import PdfProcessingError, PDF_PROCESSING_FAILED_MESSAGE
+from services.errors import (
+    AssetDeletionError,
+    PdfProcessingError,
+    PDF_PROCESSING_FAILED_MESSAGE,
+)
 import aiofiles
 from datetime import datetime, timezone
 
@@ -124,5 +128,11 @@ def update_overlays(uuid_key: str, overlays: list[dict], validated: bool = Depen
 def delete_flipbook(uuid_key: str, validated: bool = Depends(verify_api_key)):
     doc = _read_flipbook_or_404(uuid_key)
     date_str = doc.get("date_folder", "")
-    delete_single_flipbook(uuid_key, date_str)
+    try:
+        delete_single_flipbook(uuid_key, date_str)
+    except AssetDeletionError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Flipbook assets could not be deleted",
+        ) from exc
     return {"status": "ok", "message": "Flipbook deleted successfully"}

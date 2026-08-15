@@ -5,7 +5,11 @@ from concurrent.futures import ThreadPoolExecutor
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 from azure.storage.blob import ContentSettings
 from database import get_container, get_blob_container, BLOB_BASE_URL
-from services.errors import PdfProcessingError, PDF_PROCESSING_FAILED_MESSAGE
+from services.errors import (
+    AssetDeletionError,
+    PdfProcessingError,
+    PDF_PROCESSING_FAILED_MESSAGE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +26,27 @@ def _content_settings(filename: str) -> ContentSettings:
 
 
 def delete_single_flipbook(uuid_key: str, date_str: str = ""):
-    # 1. Overlays 삭제 (파티션 단위)
+    prefix_path = (
+        f"flipbooks/{date_str}/{uuid_key}/"
+        if date_str
+        else f"flipbooks/{uuid_key}/"
+    )
+
+    try:
+        container = get_blob_container()
+        blob_names = [b.name for b in container.list_blobs(name_starts_with=prefix_path)]
+
+        if blob_names:
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                list(executor.map(container.delete_blob, blob_names))
+    except Exception as exc:
+        logger.error(
+            "Blob cleanup failed for flipbook %s",
+            uuid_key,
+            exc_info=True,
+        )
+        raise AssetDeletionError(uuid_key) from exc
+
     overlays = get_container("overlays")
     overlay_ids = [
         item["id"]
@@ -33,28 +57,10 @@ def delete_single_flipbook(uuid_key: str, date_str: str = ""):
     for oid in overlay_ids:
         overlays.delete_item(item=oid, partition_key=uuid_key)
 
-    # 2. 메인 플립북 문서 삭제
     try:
         get_container("flipbooks").delete_item(item=uuid_key, partition_key=uuid_key)
     except CosmosResourceNotFoundError:
         pass
-
-    # 3. Blob 소거 (Prefix 기반) - 멀티스레딩 병렬 삭제 적용
-    try:
-        prefix_path = f"flipbooks/{date_str}/{uuid_key}/" if date_str else f"flipbooks/{uuid_key}/"
-        container = get_blob_container()
-        blob_names = [b.name for b in container.list_blobs(name_starts_with=prefix_path)]
-
-        if blob_names:
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                list(executor.map(lambda name: container.delete_blob(name), blob_names))
-
-    except Exception as e:
-        logger.warning(
-            "⚠️ [Delete] Blob cleanup failed for book-%s (%s)",
-            uuid_key,
-            e.__class__.__name__,
-        )
 
 
 def process_pdf_task(pdf_path: str, book_storage: str, uuid_key: str, date_str: str, split_pages: bool = True):

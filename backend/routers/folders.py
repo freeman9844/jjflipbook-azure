@@ -5,6 +5,7 @@ from database import get_container
 from models import Folder
 from utils import verify_api_key
 from services.flipbook_service import delete_single_flipbook
+from services.errors import AssetDeletionError
 
 router = APIRouter(tags=["Folders"])
 
@@ -43,7 +44,13 @@ def delete_folder(folder_id: str, validated: bool = Depends(verify_api_key)):
     deleted_count = 0
     for fb in flipbooks:
         # date_folder를 함께 넘겨 날짜 경로의 blob까지 정리 (기존 GCP 코드의 누락 수정)
-        delete_single_flipbook(fb["id"], fb.get("date_folder", ""))
+        try:
+            delete_single_flipbook(fb["id"], fb.get("date_folder", ""))
+        except AssetDeletionError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to delete child flipbook {fb['id']}",
+            ) from exc
         deleted_count += 1
 
     folders.delete_item(item=folder_id, partition_key=folder_id)

@@ -3,7 +3,11 @@ from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 from utils import hash_password
-from services.errors import PdfProcessingError, PDF_PROCESSING_FAILED_MESSAGE
+from services.errors import (
+    AssetDeletionError,
+    PdfProcessingError,
+    PDF_PROCESSING_FAILED_MESSAGE,
+)
 
 from main import app
 client = TestClient(app)
@@ -140,3 +144,42 @@ def test_get_flipbook_redacts_error_message(mock_get_container):
     data = response.json()
     assert data == {"id": "book-2", "status": "failed"}
     assert "raw exception text with signed-url token" not in response.text
+
+
+@patch("routers.flipbooks.delete_single_flipbook", side_effect=AssetDeletionError("book-1"))
+@patch("routers.flipbooks.get_container")
+def test_delete_flipbook_returns_bad_gateway_on_asset_failure(mock_get_container, _delete):
+    flipbooks = MagicMock()
+    flipbooks.read_item.return_value = {"id": "book-1", "date_folder": "20260815"}
+    mock_get_container.return_value = flipbooks
+
+    response = client.delete(
+        "/flipbook/book-1",
+        headers={"x-api-key": "secret_dev_key"},
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Flipbook assets could not be deleted"}
+
+
+@patch("routers.folders.delete_single_flipbook", side_effect=AssetDeletionError("book-1"))
+@patch("routers.folders.get_container")
+def test_folder_delete_failure_preserves_folder(mock_get_container, _delete):
+    folders = MagicMock()
+    folders.read_item.return_value = {"id": "folder-1"}
+    flipbooks = MagicMock()
+    flipbooks.query_items.return_value = [
+        {"id": "book-1", "date_folder": "20260815"},
+    ]
+    mock_get_container.side_effect = lambda name: {
+        "folders": folders,
+        "flipbooks": flipbooks,
+    }[name]
+
+    response = client.delete(
+        "/folder/folder-1",
+        headers={"x-api-key": "secret_dev_key"},
+    )
+
+    assert response.status_code == 502
+    folders.delete_item.assert_not_called()
