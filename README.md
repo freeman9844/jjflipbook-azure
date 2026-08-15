@@ -9,10 +9,10 @@ PDF 문서를 업로드하여 웹 브라우저에서 실제 책을 넘기는 듯
 
 - **3D 플립북 뷰어**: `react-pageflip` 기반 실제 책장 넘김 효과, 모바일 동적 스케일링(`100dvh`) 지원
 - **오버레이 에디터**: 페이지 위에 링크/영상 영역을 지정하는 에디터 (`/edit/[bookId]`)
-- **1-Level 폴더 시스템**: 폴더 단위 문서 관리 + **연쇄 삭제(Cascade Delete)** — 폴더 삭제 시 하위 플립북 메타데이터(Cosmos), 오버레이, Blob 실물 파일까지 고아 데이터 없이 일괄 정리
+- **1-Level 폴더 시스템**: 폴더 단위 문서 관리 + **연쇄 삭제(Cascade Delete)** — 폴더 삭제 시 하위 Blob 실물 파일 정리를 먼저 끝낸 뒤 Cosmos 플립북/오버레이 메타데이터를 제거하며, 중간 실패 시 메타데이터를 남겨 재시도 가능
 - **원본 PDF 보존/다운로드**: 페이지 이미지와 함께 원본 `.pdf`도 Blob에 보존, 뷰어에서 다이렉트 다운로드
 - **배경음악(BGM) 플레이어**: Blob `bgm/` 경로의 MP3를 동적으로 스캔해 플레이리스트 구성 — 재배포 없이 파일 추가/삭제만으로 갱신. 모바일 자동재생 정책은 첫 터치(`pointerdown`) 시 재생 락 해제로 우회
-- **관리자 인증**: bcrypt 해싱 + `HttpOnly` 세션 쿠키 + 내부 API 키(`INTERNAL_API_KEY`) 이중 검증. `/view/*`만 공개, 나머지는 `AuthGuard`로 보호
+- **관리자 인증**: bcrypt 해싱 + **HMAC-SHA256 서명된 8시간 `HttpOnly` 세션 쿠키** + 내부 API 키(`INTERNAL_API_KEY`) 이중 검증. `/view/*`만 공개, 나머지는 `AuthGuard`로 보호
 
 ## 아키텍처
 
@@ -21,9 +21,9 @@ PDF 문서를 업로드하여 웹 브라우저에서 실제 책을 넘기는 듯
 | **Frontend** | Next.js (standalone), react-pageflip — **Azure Container Apps** |
 | **Backend** | FastAPI (Python 3.11), poppler-utils, pdf2image — **Azure Container Apps** |
 | **Database** | **Azure Cosmos DB for NoSQL** (Serverless) — `users` / `folders` / `flipbooks` / `overlays` |
-| **Storage** | **Azure Blob Storage** 프라이빗 컨테이너 `flipbook-assets` (페이지 이미지 · PDF · `bgm/` MP3) — SAS URL로 접근 |
+| **Storage** | **Azure Blob Storage** 프라이빗 컨테이너 `flipbook-assets` (페이지 이미지 · PDF · `bgm/` MP3) — **정확한 Blob 단위 읽기 전용 User-Delegation SAS URL**로 접근 |
 | **Registry / 배포** | **ACR + azd (Azure Developer CLI) + Bicep** 원클릭 |
-| **인증(서비스 간)** | Managed Identity (Cosmos Data Contributor, Storage Blob Data Contributor) |
+| **Identity / Access** | 분리된 User-Assigned Managed Identity — **Frontend:** ACR `AcrPull` / **Backend:** ACR `AcrPull` + Cosmos DB Built-in Data Contributor + Storage Blob Data Contributor |
 
 - 컨테이너 양쪽 모두 `minReplicas: 0` — **스케일 투 제로**로 유휴 비용 최소화
 - 백엔드는 PDF 변환 OOM 방지를 위해 동시 요청 1개로 스케일 (`concurrentRequests: 1`)
@@ -40,7 +40,7 @@ graph TD
         BE -->|3. PDF 이미지 분할| Poppler["poppler-utils<br>(컨테이너 내장)"];
         BE -->|4. 원본/변환 저장<br>Managed Identity| Blob[("Azure Blob Storage<br>flipbook-assets (비공개)")];
         BE -->|5. 메타데이터 저장<br>Managed Identity| Cosmos[("Azure Cosmos DB<br>NoSQL Serverless")];
-        Blob -.->|6. SAS URL 이미지 로딩| User;
+        Blob -.->|6. Exact-blob read-only SAS URL 이미지 로딩| User;
     end
 
     style FE fill:#e8f0fe,stroke:#0078d4,stroke-width:2px
@@ -55,7 +55,7 @@ graph TD
 | --- | --- |
 | Cloud Run | Azure Container Apps |
 | Firestore (`overlays` 서브컬렉션) | Cosmos DB for NoSQL — `overlays`는 `/bookId` 파티션의 독립 컨테이너로 평탄화 |
-| Cloud Storage 공개 버킷 | Blob Storage **비공개** 컨테이너 + **User-Delegation SAS URL** |
+| Cloud Storage 공개 버킷 | Blob Storage **비공개** 컨테이너 + **exact-blob read-only User-Delegation SAS URL** |
 | Artifact Registry + Cloud Build | ACR + `remoteBuild: true` (로컬 Docker 불필요) |
 | ADC(서비스 계정) | User-Assigned **Managed Identity** + `DefaultAzureCredential` |
 | `deploy.sh` 원클릭 스크립트 | `azd up` (Bicep IaC) |
@@ -78,6 +78,7 @@ azd up     # 인프라 프로비저닝 + 빌드 + 배포
 ```
 
 `azd up` 완료 후 출력되는 `FRONTEND_URL`로 접속합니다. (최초 관리자 계정: `admin` / 설정한 `ADMIN_PASSWORD`)
+이번 보안 하드닝 배포 이후에는 기존 로그인 세션이 모두 무효화되므로 다시 로그인해야 합니다.
 
 ### 환경 변수
 
@@ -88,7 +89,7 @@ azd up     # 인프라 프로비저닝 + 빌드 + 배포
 | `NEXT_PUBLIC_BACKEND_URL` | Frontend (빌드 ARG) | 백엔드 엔드포인트 (정적 JS에 반영) |
 | `INTERNAL_API_KEY` | Backend + Frontend | FE → BE 내부 API 인증 키 (양쪽 동일) |
 | `ADMIN_PASSWORD` | Backend | 초기 관리자 계정 시딩 비밀번호 |
-| `SESSION_SECRET` | Frontend | 로그인 세션 쿠키(`auth_token`) 서명 키 |
+| `SESSION_SECRET` | Frontend | HMAC-SHA256 기반 8시간 `auth_token` 세션 서명 키 (production에서는 32자 이상 필수) |
 | `FRONTEND_URL` | Backend | CORS 허용 도메인 (Bicep이 자동 계산) |
 
 ## 로컬 개발
@@ -129,7 +130,7 @@ cd frontend && npx jest
 │   └── main.parameters.json       # azd env 파라미터 바인딩
 ├── backend/
 │   ├── main.py                    # FastAPI 진입점 (GZip, CORS, admin 시딩)
-│   ├── database.py                # Cosmos/Blob lazy singleton + SAS 발급 (get_container / get_blob_container / sign_url)
+│   ├── database.py                # Cosmos/Blob lazy singleton + exact-blob read-only SAS 발급 (get_container / get_blob_container / sign_url)
 │   ├── models.py                  # Pydantic 데이터 모델
 │   ├── utils.py                   # 비밀번호 해싱, API 키 검증
 │   ├── pdf_utils.py               # poppler 기반 PDF 렌더링 (5장 청크 처리)
@@ -168,7 +169,7 @@ cd frontend && npx jest
 ### API 응답 최적화
 - **GZip 압축**: 1KB 이상 응답 자동 압축 (`GZipMiddleware`)
 - **쿼리 제한**: `GET /flipbooks`는 `ORDER BY created_at DESC` + 최신 50건 제한 (무제한 스캔 방지)
-- **SAS 캐싱**: User-Delegation SAS는 2시간 유효 토큰을 캐시하고 만료 10분 전 자동 갱신 — 요청마다 발급하지 않음
+- **Delegation Key 캐싱**: 8시간 User-Delegation Key를 캐시하고 여유 시간을 두고 재발급 — 각 응답에서는 요청된 개별 Blob에 대해서만 읽기 전용 SAS(2시간 유효)를 새로 서명
 
 ## 💰 비용 최적화 (Zero-Waste)
 
@@ -188,12 +189,14 @@ cd frontend && npx jest
 - **백엔드 Internal Ingress**: 백엔드는 `external: false`로 Container Apps 환경 내부에서만 접근 가능 — 공용 인터넷에서 백엔드 API 직접 호출이 원천 차단됨
 - **프록시 릴레이**: 브라우저는 백엔드를 직접 호출하지 않고 Next.js `/api/backend/*` 프록시를 경유 — 쓰기 작업(업로드/삭제/오버레이 저장)은 프록시가 주입하는 `INTERNAL_API_KEY`(`X-API-Key`)를 백엔드가 재검증
 - **CORS 화이트리스트**: 백엔드는 Bicep이 계산한 `FRONTEND_URL` 단일 도메인만 허용
-- **비공개 Blob + SAS**: 컨테이너는 `publicAccess: None`. 모든 에셋 접근은 백엔드가 Managed Identity로 발급하는 **읽기 전용 User-Delegation SAS URL**(2시간 유효)로만 가능 — 계정 키 접근 자체가 비활성화됨(`allowSharedKeyAccess: false`)
+- **비공개 Blob + exact-blob SAS**: 컨테이너는 `publicAccess: None`. 공개 뷰어는 Blob 컨테이너를 목록 조회할 수 없고, 모든 에셋 접근은 백엔드가 Managed Identity로 발급하는 **정확한 Blob 단위 읽기 전용 User-Delegation SAS URL**(2시간 유효)로만 가능 — 계정 키 접근 자체가 비활성화됨(`allowSharedKeyAccess: false`)
 - **Cosmos AAD 전용 인증**: `disableLocalAuth: true`로 키 기반 접근 차단, Managed Identity(AAD)만 허용
 - **Blob Soft Delete(7일)**: 실수로 삭제된 Blob 복구 안전망
-- **Managed Identity 최소 권한**: Cosmos DB Built-in Data Contributor + Storage Blob Data Contributor를 해당 리소스 스코프로만 부여
-- **시크릿 관리**: `ADMIN_PASSWORD` / `INTERNAL_API_KEY` / `SESSION_SECRET`은 `azd env set` → Bicep `@secure()` 파라미터 → Container Apps secret으로 주입. 저장소에 하드코딩 없음
+- **분리된 Managed Identity 최소 권한**: Frontend ID는 ACR `AcrPull`만, Backend ID는 ACR `AcrPull` + Cosmos DB Built-in Data Contributor + Storage Blob Data Contributor만 부여
+- **서명 세션**: 프론트엔드는 로그인 성공 시 `username` / `iat` / `exp` / `nonce` 페이로드를 HMAC-SHA256으로 서명한 8시간짜리 `HttpOnly` 쿠키를 발급하며, 이번 배포 후 기존 세션은 모두 무효화됨
+- **시크릿 관리(Fail Closed)**: `ADMIN_PASSWORD` / `INTERNAL_API_KEY` / `SESSION_SECRET`은 `azd env set` → Bicep `@secure()` 파라미터 → Container Apps secret으로 주입. Production에는 fallback이 없으며 값이 없거나 레거시 기본값이면 앱 시작 시 즉시 실패
 - **패스워드 암호화**: bcrypt 해싱, `HttpOnly` 쿠키로 XSS 세션 탈취 차단
+- **삭제 순서 보장**: 플립북/폴더 삭제 시 Blob 정리가 완료된 뒤에만 Cosmos 메타데이터를 삭제하며, Blob 정리 실패 시 502를 반환하고 메타데이터를 남겨 재시도 가능
 
 ## 📊 관측성 (Application Insights)
 
@@ -227,7 +230,8 @@ Blob 컨테이너의 공개 접근을 차단할 수 있습니다. 이 저장소�
 - **리소스 그룹 태그 `SecurityControl: Ignore`** — MCAPS 정책 예외 태그를 RG에 설정하여
   `azd up` 후 Cosmos의 공개 네트워크 접근이 유지됩니다.
 - **SAS URL 기반 Blob 접근** — Blob 컨테이너는 의도적으로 비공개(`publicAccess: None`)이며,
-  모든 이미지·PDF·BGM 접근은 백엔드가 발급하는 User-Delegation SAS URL을 통해 이루어집니다
+  공개 사용자는 컨테이너를 나열할 수 없습니다. 모든 이미지·PDF·BGM 접근은 백엔드가 발급하는
+  exact-blob read-only User-Delegation SAS URL을 통해 이루어집니다
   (컨테이너 공개 접근 불필요).
 
 또한 `azure.yaml`의 `remoteBuild: true` 설정 덕분에 **로컬 Docker 설치 없이** ACR이 빌드를 대신 수행합니다.
@@ -236,5 +240,6 @@ Blob 컨테이너의 공개 접근을 차단할 수 있습니다. 이 저장소�
   요청 타임아웃(약 240초)을 초과하는 대형 PDF는 클라이언트에서 타임아웃될 수 있습니다.
   (Cosmos에는 `processing` 상태로 남으며, 변환은 서버에서 계속 진행됩니다.)
 - **BGM 목록**: `flipbook-assets` 컨테이너의 `bgm/` 경로에 MP3를 업로드하면
-  뮤직 플레이어 목록에 자동 노출됩니다. 백엔드 `/music/list` 엔드포인트가 user-delegation SAS URL을 생성하여 반환합니다 (컨테이너 공개 접근 불필요).
+  뮤직 플레이어 목록에 자동 노출됩니다. 공개 클라이언트는 컨테이너를 직접 나열할 수 없으므로,
+  백엔드 `/music/list` 엔드포인트가 MP3를 조회한 뒤 exact-blob read-only user-delegation SAS URL을 생성하여 반환합니다.
 - GCP 시절 설계/플랜 문서는 `docs/` 아래에 참고용으로 보존되어 있습니다.
