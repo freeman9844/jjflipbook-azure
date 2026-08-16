@@ -3,10 +3,35 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+WORKFLOW = ROOT / ".github" / "workflows" / "azure-dev.yml"
 
 
 def _load_generated_template():
     return json.loads((ROOT / "infra" / "main.json").read_text())
+
+
+def _load_workflow():
+    return WORKFLOW.read_text()
+
+
+def _workflow_job_env(workflow):
+    start = workflow.index("    env:\n") + len("    env:\n")
+    end = workflow.index("    steps:\n", start)
+    return workflow[start:end]
+
+
+def _workflow_step(workflow, step_name):
+    marker = f"      - name: {step_name}\n"
+    start = workflow.index(marker)
+    end = workflow.find("\n      - name: ", start + len(marker))
+    if end == -1:
+        return workflow[start:]
+    return workflow[start:end]
+
+
+def _assert_in_order(text, *needles):
+    positions = [text.index(needle) for needle in needles]
+    assert positions == sorted(positions)
 
 
 def _iter_resource_tree(resource):
@@ -189,7 +214,7 @@ def test_azd_uses_prebuilt_ghcr_images():
 
 
 def test_workflow_builds_ghcr_and_previews_before_provisioning():
-    workflow = (ROOT / ".github" / "workflows" / "azure-dev.yml").read_text()
+    workflow = _load_workflow()
     assert "packages: write" in workflow
     assert "actions/checkout@v5" in workflow
     assert "Azure/setup-azd@v2.3.0" in workflow
@@ -202,33 +227,91 @@ def test_workflow_builds_ghcr_and_previews_before_provisioning():
     assert (
         "ghcr.io/freeman9844/jjflipbook-azure-frontend:${{ github.sha }}" in workflow
     )
-    assert "docker manifest inspect" in workflow
-    assert 'SMOKE_ATTESTATION_FILE: ${{ runner.temp }}/jjflipbook-smoke-attestation.json' in workflow
-    assert "az containerapp list" in workflow
-    assert '>> "$GITHUB_ENV"' in workflow
-    assert workflow.count("ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}") >= 2
-    assert workflow.count("INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}") >= 2
-    assert workflow.count("SESSION_SECRET: ${{ secrets.SESSION_SECRET }}") >= 2
     assert "azd provision --preview --no-prompt" in workflow
     assert "azd provision --no-prompt" in workflow
     assert "azd deploy" not in workflow
-    assert workflow.index("azd provision --preview --no-prompt") < workflow.index(
-        "azd provision --no-prompt"
+    _assert_in_order(
+        workflow,
+        "azd provision --preview --no-prompt",
+        "azd provision --no-prompt",
     )
-    assert workflow.index("azd provision --no-prompt") < workflow.index(
-        "az containerapp list"
+
+
+def test_workflow_exports_smoke_attestation_through_github_env():
+    workflow = _load_workflow()
+    job_env = _workflow_job_env(workflow)
+    export_step = _workflow_step(workflow, "Export smoke attestation path")
+
+    assert "SMOKE_ATTESTATION_FILE:" not in job_env
+    assert 'SMOKE_ATTESTATION_FILE: ${{ runner.temp }}/jjflipbook-smoke-attestation.json' not in workflow
+    assert (
+        'echo "SMOKE_ATTESTATION_FILE=$RUNNER_TEMP/jjflipbook-smoke-attestation.json" >> "$GITHUB_ENV"'
+        in export_step
     )
-    assert workflow.index("az containerapp list") < workflow.index(
-        "scripts/smoke_test_deployment.sh"
+
+
+def test_workflow_requires_public_gate_before_azure_auth_and_direct_az_use():
+    workflow = _load_workflow()
+    verify_step = _workflow_step(workflow, "Verify images are public")
+    azure_cli_login_step = _workflow_step(workflow, "Log in to Azure CLI")
+    azd_login_step = _workflow_step(workflow, "Log in with Azure (Federated Credentials)")
+    resolve_frontend_step = _workflow_step(workflow, "Resolve frontend URL")
+
+    assert "docker logout ghcr.io" in verify_step
+    _assert_in_order(
+        verify_step,
+        "docker logout ghcr.io",
+        'docker manifest inspect "$BACKEND_IMAGE" >/dev/null',
+        'docker manifest inspect "$FRONTEND_IMAGE" >/dev/null',
     )
-    assert workflow.index("scripts/smoke_test_deployment.sh") < workflow.index(
-        "scripts/cleanup_legacy_azure_resources.sh"
+    assert "uses: azure/login@v2" in azure_cli_login_step
+    assert "client-id: ${{ vars.AZURE_CLIENT_ID }}" in azure_cli_login_step
+    assert "tenant-id: ${{ vars.AZURE_TENANT_ID }}" in azure_cli_login_step
+    assert "subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}" in azure_cli_login_step
+    assert "azd auth login" in azd_login_step
+    assert "az containerapp list" in resolve_frontend_step
+    assert 'echo "FRONTEND_URL=https://${frontend_fqdns[0]}" >> "$GITHUB_ENV"' in resolve_frontend_step
+    _assert_in_order(
+        workflow,
+        "      - name: Verify images are public\n",
+        "      - name: Log in to Azure CLI\n",
+        "      - name: Log in with Azure (Federated Credentials)\n",
+        "      - name: Preview infrastructure changes\n",
+        "      - name: Provision optimized infrastructure\n",
+        "      - name: Resolve frontend URL\n",
     )
-    assert workflow.index("scripts/cleanup_legacy_azure_resources.sh") < workflow.index(
-        "scripts/cleanup_ghcr_versions.py"
+
+
+def test_workflow_wires_smoke_and_legacy_cleanup_with_shared_environment():
+    workflow = _load_workflow()
+    smoke_step = _workflow_step(workflow, "Smoke test deployment")
+    legacy_cleanup_step = _workflow_step(workflow, "Clean up legacy Azure resources")
+
+    shared_assignments = (
+        'FRONTEND_URL="$FRONTEND_URL"',
+        'SMOKE_ATTESTATION_FILE="$SMOKE_ATTESTATION_FILE"',
     )
-    assert "scripts/smoke_test_deployment.sh" in workflow
-    assert "scripts/cleanup_legacy_azure_resources.sh" in workflow
-    assert "scripts/cleanup_ghcr_versions.py" in workflow
-    assert "GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}" in workflow
-    assert "GITHUB_TOKEN: ${{ github.token }}" in workflow
+    for assignment in shared_assignments:
+        assert assignment in smoke_step
+        assert assignment in legacy_cleanup_step
+    assert 'ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}"' in smoke_step
+    assert "bash scripts/smoke_test_deployment.sh" in smoke_step
+    assert "bash scripts/cleanup_legacy_azure_resources.sh" in legacy_cleanup_step
+    _assert_in_order(
+        workflow,
+        "      - name: Provision optimized infrastructure\n",
+        "      - name: Resolve frontend URL\n",
+        "      - name: Smoke test deployment\n",
+        "      - name: Clean up legacy Azure resources\n",
+        "      - name: Clean up GHCR versions\n",
+    )
+
+
+def test_workflow_wires_ghcr_cleanup_environment():
+    workflow = _load_workflow()
+    ghcr_cleanup_step = _workflow_step(workflow, "Clean up GHCR versions")
+
+    assert "python3 scripts/cleanup_ghcr_versions.py" in ghcr_cleanup_step
+    assert "AZURE_ENV_NAME: ${{ env.AZURE_ENV_NAME }}" in ghcr_cleanup_step
+    assert "GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}" in ghcr_cleanup_step
+    assert "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in ghcr_cleanup_step

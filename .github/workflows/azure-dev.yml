@@ -26,10 +26,11 @@ jobs:
       AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
       BACKEND_IMAGE: ghcr.io/freeman9844/jjflipbook-azure-backend:${{ github.sha }}
       FRONTEND_IMAGE: ghcr.io/freeman9844/jjflipbook-azure-frontend:${{ github.sha }}
-      SMOKE_ATTESTATION_FILE: ${{ runner.temp }}/jjflipbook-smoke-attestation.json
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+      - name: Export smoke attestation path
+        run: echo "SMOKE_ATTESTATION_FILE=$RUNNER_TEMP/jjflipbook-smoke-attestation.json" >> "$GITHUB_ENV"
       - name: Install azd
         uses: Azure/setup-azd@v2.3.0
       - name: Set up Docker Buildx
@@ -61,6 +62,12 @@ jobs:
           docker logout ghcr.io
           docker manifest inspect "$BACKEND_IMAGE" >/dev/null
           docker manifest inspect "$FRONTEND_IMAGE" >/dev/null
+      - name: Log in to Azure CLI
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Log in with Azure (Federated Credentials)
         run: |
           azd auth login `
@@ -93,14 +100,19 @@ jobs:
           fi
           echo "FRONTEND_URL=https://${frontend_fqdns[0]}" >> "$GITHUB_ENV"
       - name: Smoke test deployment
-        run: bash scripts/smoke_test_deployment.sh
-        env:
-          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+        run: |
+          FRONTEND_URL="$FRONTEND_URL" \
+          SMOKE_ATTESTATION_FILE="$SMOKE_ATTESTATION_FILE" \
+          ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}" \
+          bash scripts/smoke_test_deployment.sh
       - name: Clean up legacy Azure resources
-        run: bash scripts/cleanup_legacy_azure_resources.sh
+        run: |
+          FRONTEND_URL="$FRONTEND_URL" \
+          SMOKE_ATTESTATION_FILE="$SMOKE_ATTESTATION_FILE" \
+          bash scripts/cleanup_legacy_azure_resources.sh
       - name: Clean up GHCR versions
         run: python3 scripts/cleanup_ghcr_versions.py
         env:
           AZURE_ENV_NAME: ${{ env.AZURE_ENV_NAME }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
