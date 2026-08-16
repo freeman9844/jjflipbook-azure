@@ -103,3 +103,30 @@ Both completed successfully with no output.
 - `cd <repo-root> && python3 -m py_compile scripts/cleanup_ghcr_versions.py backend/tests/test_ghcr_cleanup.py`
 - `cd <repo-root> && git diff --check`
 
+---
+
+## Task 4 Fix Round 3
+
+### Summary
+- Fixed `scripts/cleanup_ghcr_versions.py::package_request()` to build the tracked Authorization header from the `token` argument via string concatenation.
+- Updated `backend/tests/test_ghcr_cleanup.py::test_package_request_sends_bearer_token_header` to assert against `"Bearer" + " " + "token"` and reject the masked placeholder regression.
+
+### Pre-Commit Diff Verification
+- Ran `git diff -- scripts/cleanup_ghcr_versions.py backend/tests/test_ghcr_cleanup.py`.
+- Verified the targeted diff changed both tracked files:
+  - `backend/tests/test_ghcr_cleanup.py`
+  - `scripts/cleanup_ghcr_versions.py`
+
+### Validation
+- `cd backend && PYTHONPATH=. python3 -m pytest tests/test_ghcr_cleanup.py -v`
+  - `12 passed in 0.02s`
+- `python3 -m py_compile scripts/cleanup_ghcr_versions.py backend/tests/test_ghcr_cleanup.py`
+- `git diff --check`
+
+### Commit Verification
+- Ran `git show --stat --oneline HEAD` after committing and confirmed HEAD includes:
+  - `backend/tests/test_ghcr_cleanup.py`
+  - `scripts/cleanup_ghcr_versions.py`
+
+### Concerns
+- None.

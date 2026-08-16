@@ -178,3 +178,57 @@ def test_parameter_file_maps_immutable_images():
     ]
     assert parameters["backendImage"]["value"] == "${BACKEND_IMAGE}"
     assert parameters["frontendImage"]["value"] == "${FRONTEND_IMAGE}"
+
+
+def test_azd_uses_prebuilt_ghcr_images():
+    azure_yaml = (ROOT / "azure.yaml").read_text()
+    assert "image: ${BACKEND_IMAGE}" in azure_yaml
+    assert "image: ${FRONTEND_IMAGE}" in azure_yaml
+    assert "remoteBuild:" not in azure_yaml
+    assert "project:" not in azure_yaml
+
+
+def test_workflow_builds_ghcr_and_previews_before_provisioning():
+    workflow = (ROOT / ".github" / "workflows" / "azure-dev.yml").read_text()
+    assert "packages: write" in workflow
+    assert "actions/checkout@v5" in workflow
+    assert "Azure/setup-azd@v2.3.0" in workflow
+    assert "docker/setup-buildx-action@v3" in workflow
+    assert "docker/login-action@v3" in workflow
+    assert workflow.count("docker/build-push-action@v6") == 2
+    assert (
+        "ghcr.io/freeman9844/jjflipbook-azure-backend:${{ github.sha }}" in workflow
+    )
+    assert (
+        "ghcr.io/freeman9844/jjflipbook-azure-frontend:${{ github.sha }}" in workflow
+    )
+    assert "docker manifest inspect" in workflow
+    assert 'SMOKE_ATTESTATION_FILE: ${{ runner.temp }}/jjflipbook-smoke-attestation.json' in workflow
+    assert "az containerapp list" in workflow
+    assert '>> "$GITHUB_ENV"' in workflow
+    assert workflow.count("ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}") >= 2
+    assert workflow.count("INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}") >= 2
+    assert workflow.count("SESSION_SECRET: ${{ secrets.SESSION_SECRET }}") >= 2
+    assert "azd provision --preview --no-prompt" in workflow
+    assert "azd provision --no-prompt" in workflow
+    assert "azd deploy" not in workflow
+    assert workflow.index("azd provision --preview --no-prompt") < workflow.index(
+        "azd provision --no-prompt"
+    )
+    assert workflow.index("azd provision --no-prompt") < workflow.index(
+        "az containerapp list"
+    )
+    assert workflow.index("az containerapp list") < workflow.index(
+        "scripts/smoke_test_deployment.sh"
+    )
+    assert workflow.index("scripts/smoke_test_deployment.sh") < workflow.index(
+        "scripts/cleanup_legacy_azure_resources.sh"
+    )
+    assert workflow.index("scripts/cleanup_legacy_azure_resources.sh") < workflow.index(
+        "scripts/cleanup_ghcr_versions.py"
+    )
+    assert "scripts/smoke_test_deployment.sh" in workflow
+    assert "scripts/cleanup_legacy_azure_resources.sh" in workflow
+    assert "scripts/cleanup_ghcr_versions.py" in workflow
+    assert "GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}" in workflow
+    assert "GITHUB_TOKEN: ${{ github.token }}" in workflow

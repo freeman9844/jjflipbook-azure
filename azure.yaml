@@ -1,19 +1,12 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/azure/azure-dev/main/schemas/v1.0/azure.yaml.json
 name: jjflipbook-azure
+infra:
+  provider: bicep
+  path: infra
 services:
   backend:
-    project: ./backend
-    language: py
     host: containerapp
-    docker:
-      path: ./Dockerfile
-      remoteBuild: true
+    image: ${BACKEND_IMAGE}
   frontend:
-    project: ./frontend
-    language: js
     host: containerapp
-    docker:
-      path: ./Dockerfile
-      remoteBuild: true
-      buildArgs:
-        - NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL}
+    image: ${FRONTEND_IMAGE}
