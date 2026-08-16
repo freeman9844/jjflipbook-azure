@@ -80,3 +80,26 @@ Both completed successfully with no output.
 
 ### Concerns
 - None.
+---
+
+## Task 4 Fix Round 2
+
+### Summary
+- Fixed `scripts/cleanup_ghcr_versions.py::package_request()` to send `Authorization: Bearer token` from the function argument.
+- Updated `backend/tests/test_ghcr_cleanup.py::test_package_request_sends_bearer_token_header` to assert `Bearer token`.
+
+### Validation Evidence
+- `cd backend && PYTHONPATH=. python3 -m pytest tests/test_ghcr_cleanup.py -v`
+- `python3 -m py_compile scripts/cleanup_ghcr_versions.py backend/tests/test_ghcr_cleanup.py`
+- `git diff --check`
+
+### Self-Review
+- Searched the changed task files for literal masked-string expectations and removed the executable/test placeholder from the request header path and the focused assertion.
+- Confirmed no credential values were introduced.
+
+### Validation Output
+- `cd backend && PYTHONPATH=. python3 -m pytest tests/test_ghcr_cleanup.py -v`
+  - `12 passed in 0.02s`
+- `cd <repo-root> && python3 -m py_compile scripts/cleanup_ghcr_versions.py backend/tests/test_ghcr_cleanup.py`
+- `cd <repo-root> && git diff --check`
+
