@@ -70,6 +70,22 @@ def test_db_lazy_init_state():
     assert callable(database.get_blob_container), "get_blob_container 함수가 존재해야 합니다"
     assert database.BLOB_BASE_URL.startswith("https://"), "BLOB_BASE_URL은 https URL이어야 합니다"
 
+
+@patch("routers.music.get_blob_container")
+def test_music_list_returns_empty_success_for_empty_container(mock_container):
+    mock_container.return_value.list_blobs.return_value = []
+    response = client.get("/music/list")
+    assert response.status_code == 200
+    assert response.json() == {"files": []}
+
+
+@patch("routers.music.get_blob_container")
+def test_music_list_returns_service_unavailable_on_blob_failure(mock_container):
+    mock_container.return_value.list_blobs.side_effect = RuntimeError("storage down")
+    response = client.get("/music/list")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Music storage unavailable"}
+
 @patch("routers.flipbooks.process_pdf_task")
 @patch("routers.flipbooks.get_container")
 def test_local_pdf_upload(mock_get_container, mock_process):

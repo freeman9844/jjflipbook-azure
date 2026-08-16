@@ -25,6 +25,13 @@ _blob_container = None
 
 _delegation_key = None
 _delegation_key_expiry: datetime | None = None
+_sas_cache_lock = threading.Lock()
+_signed_url_cache: dict[str, tuple[str, datetime]] = {}
+_SIGNED_URL_CACHE_TTL = timedelta(minutes=90)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _get_credential() -> DefaultAzureCredential:
@@ -101,7 +108,12 @@ def sign_url(url: str) -> str:
     if not blob_name:
         return url
 
-    now = datetime.now(timezone.utc)
+    now = _utc_now()
+    with _sas_cache_lock:
+        cached = _signed_url_cache.get(blob_name)
+        if cached and cached[1] > now:
+            return cached[0]
+
     token = generate_blob_sas(
         account_name=STORAGE_ACCOUNT_NAME,
         container_name=BLOB_CONTAINER_NAME,
@@ -112,5 +124,10 @@ def sign_url(url: str) -> str:
         expiry=now + timedelta(hours=2),
     )
     unsigned_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-    return f"{unsigned_url}?{token}"
-
+    signed_url = f"{unsigned_url}?{token}"
+    with _sas_cache_lock:
+        _signed_url_cache[blob_name] = (
+            signed_url,
+            now + _SIGNED_URL_CACHE_TTL,
+        )
+    return signed_url

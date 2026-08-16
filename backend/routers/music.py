@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from database import get_blob_container, sign_url, BLOB_BASE_URL
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,12 @@ def list_music():
             if b.name.endswith(".mp3")
         ]
         return {"files": files}
-    except Exception as e:
-        logger.warning(f"⚠️ [Music] Failed to list BGM blobs: {e}")
-        return {"files": []}
+    except Exception as exc:
+        logger.warning(
+            "Music storage listing failed (%s)",
+            exc.__class__.__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Music storage unavailable",
+        ) from exc
