@@ -20,6 +20,12 @@ def test_local_health_check():
     assert data.get("status") == "ok", "status 필드가 'ok' 여야 합니다"
     assert "services" not in data, "경량화된 헬스체크에 services 항목이 없어야 합니다"
 
+
+def test_dedicated_health_check():
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
 def _fake_users_container(password: str):
     container = MagicMock()
     container.read_item.return_value = {

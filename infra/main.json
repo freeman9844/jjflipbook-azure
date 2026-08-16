@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "3057710503791638656"
+      "templateHash": "9928411715579856865"
     }
   },
   "parameters": {
@@ -103,7 +103,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "4512110716050429047"
+              "templateHash": "4545806533455738928"
             }
           },
           "parameters": {
@@ -403,7 +403,7 @@
                         {
                           "type": "Startup",
                           "httpGet": {
-                            "path": "/",
+                            "path": "/healthz",
                             "port": 8080
                           },
                           "initialDelaySeconds": 3,
@@ -413,7 +413,7 @@
                         {
                           "type": "Liveness",
                           "httpGet": {
-                            "path": "/",
+                            "path": "/healthz",
                             "port": 8080
                           },
                           "periodSeconds": 30,
@@ -422,7 +422,7 @@
                         {
                           "type": "Readiness",
                           "httpGet": {
-                            "path": "/",
+                            "path": "/healthz",
                             "port": 8080
                           },
                           "periodSeconds": 10,

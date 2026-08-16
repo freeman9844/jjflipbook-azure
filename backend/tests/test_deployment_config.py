@@ -148,10 +148,12 @@ def test_bicep_defines_selected_scaling_policy():
 
     backend_container = backend_app["properties"]["template"]["containers"][0]
     frontend_container = frontend_app["properties"]["template"]["containers"][0]
+    backend_probes = backend_container["probes"]
     assert backend_container["resources"]["cpu"] == "[json('1.0')]"
     assert backend_container["resources"]["memory"] == "2Gi"
     assert frontend_container["resources"]["cpu"] == "[json('0.25')]"
     assert frontend_container["resources"]["memory"] == "0.5Gi"
+    assert {probe["httpGet"]["path"] for probe in backend_probes} == {"/healthz"}
 
     backend_scale = backend_app["properties"]["template"]["scale"]
     frontend_scale = frontend_app["properties"]["template"]["scale"]
@@ -189,6 +191,11 @@ def test_bicep_defines_selected_scaling_policy():
         "end": "5 20 * * *",
         "desiredReplicas": "1",
     }
+
+
+def test_backend_excludes_health_from_application_telemetry():
+    main_source = (ROOT / "backend" / "main.py").read_text()
+    assert 'FastAPIInstrumentor.instrument_app(app, excluded_urls="/healthz")' in main_source
 
 
 def test_bicep_disables_defender_only_at_storage_scope():

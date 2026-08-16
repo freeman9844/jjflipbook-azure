@@ -13,7 +13,13 @@ from utils import hash_password, required_setting, validate_runtime_config
 
 from routers import auth, flipbooks, folders, music
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+def configure_logging() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logging.getLogger("azure").setLevel(logging.WARNING)
+
+
+configure_logging()
 logger = logging.getLogger(__name__)
 
 # Application Insights (OpenTelemetry) — 연결 문자열이 있을 때만 활성화 (로컬/테스트는 no-op)
@@ -65,7 +71,7 @@ app = FastAPI(
 if _APPINSIGHTS_ENABLED:
     try:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-        FastAPIInstrumentor.instrument_app(app)
+        FastAPIInstrumentor.instrument_app(app, excluded_urls="/healthz")
     except Exception as e:
         logger.warning(f"⚠️ FastAPI instrumentation failed (non-critical): {e}")
 
@@ -97,3 +103,8 @@ def read_root():
         "status": "ok",
         "message": "Flipbook MVP API is running"
     }
+
+
+@app.get("/healthz")
+def health_check():
+    return {"status": "ok"}

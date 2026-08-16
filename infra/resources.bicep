@@ -209,20 +209,20 @@ resource backendApp 'Microsoft.App/containerApps@2026-01-01' = {
           probes: [
             {
               type: 'Startup'
-              httpGet: { path: '/', port: 8080 }
+              httpGet: { path: '/healthz', port: 8080 }
               initialDelaySeconds: 3
               periodSeconds: 3
               failureThreshold: 20
             }
             {
               type: 'Liveness'
-              httpGet: { path: '/', port: 8080 }
+              httpGet: { path: '/healthz', port: 8080 }
               periodSeconds: 30
               failureThreshold: 3
             }
             {
               type: 'Readiness'
-              httpGet: { path: '/', port: 8080 }
+              httpGet: { path: '/healthz', port: 8080 }
               periodSeconds: 10
               failureThreshold: 3
             }
