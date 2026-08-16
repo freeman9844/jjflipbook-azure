@@ -11,6 +11,9 @@ param internalApiKey string
 @secure()
 param sessionSecret string
 
+param backendImage string
+param frontendImage string
+
 var backendAppName = 'ca-backend-${resourceToken}'
 var frontendAppName = 'ca-frontend-${resourceToken}'
 var blobContainerName = 'flipbook-assets'
@@ -19,12 +22,6 @@ var cosmosDbName = 'jjflipbook'
 // ---------- Identity ----------
 resource backendIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'id-backend-${resourceToken}'
-  location: location
-  tags: tags
-}
-
-resource frontendIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: 'id-frontend-${resourceToken}'
   location: location
   tags: tags
 }
@@ -51,37 +48,6 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
-// ---------- Container Registry ----------
-resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
-  name: 'acr${resourceToken}'
-  location: location
-  tags: tags
-  sku: { name: 'Basic' }
-  properties: { adminUserEnabled: false }
-}
-
-resource backendAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: acr
-  name: guid(acr.id, backendIdentity.id, 'acrpull')
-  properties: {
-    // AcrPull
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
-    principalId: backendIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource frontendAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: acr
-  name: guid(acr.id, frontendIdentity.id, 'acrpull')
-  properties: {
-    // AcrPull
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
-    principalId: frontendIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
 // ---------- Storage (프라이빗 컨테이너 — SAS URL로 접근) ----------
 resource storage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name: 'st${resourceToken}'
@@ -94,6 +60,15 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
     allowSharedKeyAccess: false // MI + User-Delegation SAS만 사용 — 계정 키 차단
     supportsHttpsTrafficOnly: true
     minimumTlsVersion: 'TLS1_2'
+  }
+}
+
+resource defenderForStorage 'Microsoft.Security/defenderForStorageSettings@2025-06-01' = {
+  scope: storage
+  name: 'current'
+  properties: {
+    isEnabled: false
+    overrideSubscriptionLevelSettings: true
   }
 }
 
@@ -184,7 +159,7 @@ resource cosmosDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAss
 }
 
 // ---------- Container Apps ----------
-resource cae 'Microsoft.App/managedEnvironments@2024-03-01' = {
+resource cae 'Microsoft.App/managedEnvironments@2026-01-01' = {
   name: 'cae-${resourceToken}'
   location: location
   tags: tags
@@ -203,9 +178,8 @@ resource cae 'Microsoft.App/managedEnvironments@2024-03-01' = {
 // 백엔드는 internal ingress — 같은 환경 내부에서만 접근 가능한 FQDN
 var backendUrl = 'https://${backendAppName}.internal.${cae.properties.defaultDomain}'
 var frontendUrl = 'https://${frontendAppName}.${cae.properties.defaultDomain}'
-var placeholderImage = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
-resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
+resource backendApp 'Microsoft.App/containerApps@2026-01-01' = {
   name: backendAppName
   location: location
   tags: union(tags, { 'azd-service-name': 'backend' })
@@ -221,9 +195,6 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8080
         transport: 'auto'
       }
-      registries: [
-        { server: acr.properties.loginServer, identity: backendIdentity.id }
-      ]
       secrets: [
         { name: 'admin-password', value: adminPassword }
         { name: 'internal-api-key', value: internalApiKey }
@@ -233,7 +204,7 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
       containers: [
         {
           name: 'backend'
-          image: placeholderImage
+          image: backendImage
           resources: { cpu: json('1.0'), memory: '2Gi' }
           probes: [
             {
@@ -273,6 +244,8 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
       scale: {
         minReplicas: 0
         maxReplicas: 2
+        cooldownPeriod: 60
+        pollingInterval: 30
         rules: [
           {
             name: 'http-single'
@@ -285,17 +258,13 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
       }
     }
   }
-  dependsOn: [backendAcrPull, blobContributor, cosmosDataContributor]
+  dependsOn: [blobContributor, cosmosDataContributor]
 }
 
-resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
+resource frontendApp 'Microsoft.App/containerApps@2026-01-01' = {
   name: frontendAppName
   location: location
   tags: union(tags, { 'azd-service-name': 'frontend' })
-  identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: { '${frontendIdentity.id}': {} }
-  }
   properties: {
     managedEnvironmentId: cae.id
     configuration: {
@@ -304,9 +273,6 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 3000
         transport: 'auto'
       }
-      registries: [
-        { server: acr.properties.loginServer, identity: frontendIdentity.id }
-      ]
       secrets: [
         { name: 'session-secret', value: sessionSecret }
         { name: 'internal-api-key', value: internalApiKey }
@@ -316,8 +282,8 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
       containers: [
         {
           name: 'frontend'
-          image: placeholderImage
-          resources: { cpu: json('0.5'), memory: '1Gi' }
+          image: frontendImage
+          resources: { cpu: json('0.25'), memory: '0.5Gi' }
           probes: [
             {
               type: 'Startup'
@@ -349,13 +315,33 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
       scale: {
         minReplicas: 0
         maxReplicas: 2
+        cooldownPeriod: 60
+        pollingInterval: 30
+        rules: [
+          {
+            name: 'http'
+            http: {
+              metadata: { concurrentRequests: '10' }
+            }
+          }
+          {
+            name: 'daily-warm-window'
+            custom: {
+              type: 'cron'
+              metadata: {
+                timezone: 'Asia/Seoul'
+                start: '55 9 * * *'
+                end: '5 20 * * *'
+                desiredReplicas: '1'
+              }
+            }
+          }
+        ]
       }
     }
   }
-  dependsOn: [frontendAcrPull]
 }
 
-output acrLoginServer string = acr.properties.loginServer
 output cosmosEndpoint string = cosmosAccount.properties.documentEndpoint
 output storageAccountName string = storage.name
 output backendUrl string = backendUrl

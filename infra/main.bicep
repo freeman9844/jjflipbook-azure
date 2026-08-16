@@ -18,6 +18,12 @@ param internalApiKey string
 @secure()
 param sessionSecret string
 
+@description('Immutable public GHCR image for the backend')
+param backendImage string
+
+@description('Immutable public GHCR image for the frontend')
+param frontendImage string
+
 var tags = { 'azd-env-name': environmentName, SecurityControl: 'Ignore' }
 
 resource rg 'Microsoft.Resources/resourceGroups@2022-09-01' = {
@@ -36,10 +42,11 @@ module resources 'resources.bicep' = {
     adminPassword: adminPassword
     internalApiKey: internalApiKey
     sessionSecret: sessionSecret
+    backendImage: backendImage
+    frontendImage: frontendImage
   }
 }
 
-output AZURE_CONTAINER_REGISTRY_ENDPOINT string = resources.outputs.acrLoginServer
 output COSMOS_ENDPOINT string = resources.outputs.cosmosEndpoint
 output COSMOS_DB_NAME string = 'jjflipbook'
 output STORAGE_ACCOUNT_NAME string = resources.outputs.storageAccountName

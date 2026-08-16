@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "10495504638473266948"
+      "templateHash": "9266920449650958099"
     }
   },
   "parameters": {
@@ -32,6 +32,18 @@
     },
     "sessionSecret": {
       "type": "securestring"
+    },
+    "backendImage": {
+      "type": "string",
+      "metadata": {
+        "description": "Immutable public GHCR image for the backend"
+      }
+    },
+    "frontendImage": {
+      "type": "string",
+      "metadata": {
+        "description": "Immutable public GHCR image for the frontend"
+      }
     }
   },
   "variables": {
@@ -76,6 +88,12 @@
           },
           "sessionSecret": {
             "value": "[parameters('sessionSecret')]"
+          },
+          "backendImage": {
+            "value": "[parameters('backendImage')]"
+          },
+          "frontendImage": {
+            "value": "[parameters('frontendImage')]"
           }
         },
         "template": {
@@ -85,7 +103,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "17221789102224892914"
+              "templateHash": "12261628274536993052"
             }
           },
           "parameters": {
@@ -106,6 +124,12 @@
             },
             "sessionSecret": {
               "type": "securestring"
+            },
+            "backendImage": {
+              "type": "string"
+            },
+            "frontendImage": {
+              "type": "string"
             }
           },
           "variables": {
@@ -130,14 +154,13 @@
                 "name": "overlays",
                 "pk": "/bookId"
               }
-            ],
-            "placeholderImage": "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+            ]
           },
           "resources": [
             {
               "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
               "apiVersion": "2023-01-31",
-              "name": "[format('id-{0}', parameters('resourceToken'))]",
+              "name": "[format('id-backend-{0}', parameters('resourceToken'))]",
               "location": "[parameters('location')]",
               "tags": "[parameters('tags')]"
             },
@@ -155,31 +178,18 @@
               }
             },
             {
-              "type": "Microsoft.ContainerRegistry/registries",
-              "apiVersion": "2023-07-01",
-              "name": "[format('acr{0}', parameters('resourceToken'))]",
+              "type": "Microsoft.Insights/components",
+              "apiVersion": "2020-02-02",
+              "name": "[format('appi-{0}', parameters('resourceToken'))]",
               "location": "[parameters('location')]",
               "tags": "[parameters('tags')]",
-              "sku": {
-                "name": "Basic"
-              },
+              "kind": "web",
               "properties": {
-                "adminUserEnabled": false
-              }
-            },
-            {
-              "type": "Microsoft.Authorization/roleAssignments",
-              "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('resourceToken')))]",
-              "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('resourceToken'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken'))), 'acrpull')]",
-              "properties": {
-                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
-                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken'))), '2023-01-31').principalId]",
-                "principalType": "ServicePrincipal"
+                "Application_Type": "web",
+                "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-{0}', parameters('resourceToken')))]"
               },
               "dependsOn": [
-                "[resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('resourceToken')))]",
-                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken')))]"
+                "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-{0}', parameters('resourceToken')))]"
               ]
             },
             {
@@ -194,13 +204,34 @@
               "kind": "StorageV2",
               "properties": {
                 "allowBlobPublicAccess": false,
+                "allowSharedKeyAccess": false,
+                "supportsHttpsTrafficOnly": true,
                 "minimumTlsVersion": "TLS1_2"
               }
+            },
+            {
+              "type": "Microsoft.Security/defenderForStorageSettings",
+              "apiVersion": "2025-06-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', format('st{0}', parameters('resourceToken')))]",
+              "name": "current",
+              "properties": {
+                "isEnabled": false,
+                "overrideSubscriptionLevelSettings": true
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', format('st{0}', parameters('resourceToken')))]"
+              ]
             },
             {
               "type": "Microsoft.Storage/storageAccounts/blobServices",
               "apiVersion": "2023-01-01",
               "name": "[format('{0}/{1}', format('st{0}', parameters('resourceToken')), 'default')]",
+              "properties": {
+                "deleteRetentionPolicy": {
+                  "enabled": true,
+                  "days": 7
+                }
+              },
               "dependsOn": [
                 "[resourceId('Microsoft.Storage/storageAccounts', format('st{0}', parameters('resourceToken')))]"
               ]
@@ -220,14 +251,14 @@
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
               "scope": "[resourceId('Microsoft.Storage/storageAccounts', format('st{0}', parameters('resourceToken')))]",
-              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', format('st{0}', parameters('resourceToken'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken'))), 'blobcontrib')]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', format('st{0}', parameters('resourceToken'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-backend-{0}', parameters('resourceToken'))), 'blobcontrib')]",
               "properties": {
                 "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')]",
-                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken'))), '2023-01-31').principalId]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-backend-{0}', parameters('resourceToken'))), '2023-01-31').principalId]",
                 "principalType": "ServicePrincipal"
               },
               "dependsOn": [
-                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken')))]",
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-backend-{0}', parameters('resourceToken')))]",
                 "[resourceId('Microsoft.Storage/storageAccounts', format('st{0}', parameters('resourceToken')))]"
               ]
             },
@@ -255,7 +286,8 @@
                     "name": "EnableServerless"
                   }
                 ],
-                "publicNetworkAccess": "Enabled"
+                "publicNetworkAccess": "Enabled",
+                "disableLocalAuth": true
               }
             },
             {
@@ -297,20 +329,20 @@
             {
               "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments",
               "apiVersion": "2024-05-15",
-              "name": "[format('{0}/{1}', format('cosmos-{0}', parameters('resourceToken')), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', format('cosmos-{0}', parameters('resourceToken'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken'))), 'datacontrib'))]",
+              "name": "[format('{0}/{1}', format('cosmos-{0}', parameters('resourceToken')), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', format('cosmos-{0}', parameters('resourceToken'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-backend-{0}', parameters('resourceToken'))), 'datacontrib'))]",
               "properties": {
                 "roleDefinitionId": "[format('{0}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002', resourceId('Microsoft.DocumentDB/databaseAccounts', format('cosmos-{0}', parameters('resourceToken'))))]",
-                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken'))), '2023-01-31').principalId]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-backend-{0}', parameters('resourceToken'))), '2023-01-31').principalId]",
                 "scope": "[resourceId('Microsoft.DocumentDB/databaseAccounts', format('cosmos-{0}', parameters('resourceToken')))]"
               },
               "dependsOn": [
-                "[resourceId('Microsoft.DocumentDB/databaseAccounts', format('cosmos-{0}', parameters('resourceToken')))]",
-                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken')))]"
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-backend-{0}', parameters('resourceToken')))]",
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts', format('cosmos-{0}', parameters('resourceToken')))]"
               ]
             },
             {
               "type": "Microsoft.App/managedEnvironments",
-              "apiVersion": "2024-03-01",
+              "apiVersion": "2026-01-01",
               "name": "[format('cae-{0}', parameters('resourceToken'))]",
               "location": "[parameters('location')]",
               "tags": "[parameters('tags')]",
@@ -329,30 +361,24 @@
             },
             {
               "type": "Microsoft.App/containerApps",
-              "apiVersion": "2024-03-01",
+              "apiVersion": "2026-01-01",
               "name": "[variables('backendAppName')]",
               "location": "[parameters('location')]",
               "tags": "[union(parameters('tags'), createObject('azd-service-name', 'backend'))]",
               "identity": {
                 "type": "UserAssigned",
                 "userAssignedIdentities": {
-                  "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken'))))]": {}
+                  "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-backend-{0}', parameters('resourceToken'))))]": {}
                 }
               },
               "properties": {
                 "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', format('cae-{0}', parameters('resourceToken')))]",
                 "configuration": {
                   "ingress": {
-                    "external": true,
+                    "external": false,
                     "targetPort": 8080,
                     "transport": "auto"
                   },
-                  "registries": [
-                    {
-                      "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('resourceToken'))), '2023-07-01').loginServer]",
-                      "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken')))]"
-                    }
-                  ],
                   "secrets": [
                     {
                       "name": "admin-password",
@@ -368,12 +394,46 @@
                   "containers": [
                     {
                       "name": "backend",
-                      "image": "[variables('placeholderImage')]",
+                      "image": "[parameters('backendImage')]",
                       "resources": {
                         "cpu": "[json('1.0')]",
                         "memory": "2Gi"
                       },
+                      "probes": [
+                        {
+                          "type": "Startup",
+                          "httpGet": {
+                            "path": "/",
+                            "port": 8080
+                          },
+                          "initialDelaySeconds": 3,
+                          "periodSeconds": 3,
+                          "failureThreshold": 20
+                        },
+                        {
+                          "type": "Liveness",
+                          "httpGet": {
+                            "path": "/",
+                            "port": 8080
+                          },
+                          "periodSeconds": 30,
+                          "failureThreshold": 3
+                        },
+                        {
+                          "type": "Readiness",
+                          "httpGet": {
+                            "path": "/",
+                            "port": 8080
+                          },
+                          "periodSeconds": 10,
+                          "failureThreshold": 3
+                        }
+                      ],
                       "env": [
+                        {
+                          "name": "APP_ENV",
+                          "value": "production"
+                        },
                         {
                           "name": "COSMOS_ENDPOINT",
                           "value": "[reference(resourceId('Microsoft.DocumentDB/databaseAccounts', format('cosmos-{0}', parameters('resourceToken'))), '2024-05-15').documentEndpoint]"
@@ -392,7 +452,11 @@
                         },
                         {
                           "name": "AZURE_CLIENT_ID",
-                          "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken'))), '2023-01-31').clientId]"
+                          "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-backend-{0}', parameters('resourceToken'))), '2023-01-31').clientId]"
+                        },
+                        {
+                          "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                          "value": "[reference(resourceId('Microsoft.Insights/components', format('appi-{0}', parameters('resourceToken'))), '2020-02-02').ConnectionString]"
                         },
                         {
                           "name": "ADMIN_PASSWORD",
@@ -404,7 +468,7 @@
                         },
                         {
                           "name": "FRONTEND_URL",
-                          "value": "[format('https://{0}.{1}', variables('frontendAppName'), reference(resourceId('Microsoft.App/managedEnvironments', format('cae-{0}', parameters('resourceToken'))), '2024-03-01').defaultDomain)]"
+                          "value": "[format('https://{0}.{1}', variables('frontendAppName'), reference(resourceId('Microsoft.App/managedEnvironments', format('cae-{0}', parameters('resourceToken'))), '2026-01-01').defaultDomain)]"
                         }
                       ]
                     }
@@ -412,6 +476,8 @@
                   "scale": {
                     "minReplicas": 0,
                     "maxReplicas": 2,
+                    "cooldownPeriod": 60,
+                    "pollingInterval": 30,
                     "rules": [
                       {
                         "name": "http-single",
@@ -426,28 +492,21 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('resourceToken')))]",
-                "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('resourceToken'))), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('resourceToken'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken'))), 'acrpull'))]",
-                "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', format('st{0}', parameters('resourceToken'))), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Storage/storageAccounts', format('st{0}', parameters('resourceToken'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken'))), 'blobcontrib'))]",
+                "[resourceId('Microsoft.Insights/components', format('appi-{0}', parameters('resourceToken')))]",
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-backend-{0}', parameters('resourceToken')))]",
+                "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', format('st{0}', parameters('resourceToken'))), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Storage/storageAccounts', format('st{0}', parameters('resourceToken'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-backend-{0}', parameters('resourceToken'))), 'blobcontrib'))]",
                 "[resourceId('Microsoft.App/managedEnvironments', format('cae-{0}', parameters('resourceToken')))]",
                 "[resourceId('Microsoft.DocumentDB/databaseAccounts', format('cosmos-{0}', parameters('resourceToken')))]",
-                "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments', format('cosmos-{0}', parameters('resourceToken')), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', format('cosmos-{0}', parameters('resourceToken'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken'))), 'datacontrib'))]",
-                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken')))]",
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments', format('cosmos-{0}', parameters('resourceToken')), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', format('cosmos-{0}', parameters('resourceToken'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-backend-{0}', parameters('resourceToken'))), 'datacontrib'))]",
                 "[resourceId('Microsoft.Storage/storageAccounts', format('st{0}', parameters('resourceToken')))]"
               ]
             },
             {
               "type": "Microsoft.App/containerApps",
-              "apiVersion": "2024-03-01",
+              "apiVersion": "2026-01-01",
               "name": "[variables('frontendAppName')]",
               "location": "[parameters('location')]",
               "tags": "[union(parameters('tags'), createObject('azd-service-name', 'frontend'))]",
-              "identity": {
-                "type": "UserAssigned",
-                "userAssignedIdentities": {
-                  "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken'))))]": {}
-                }
-              },
               "properties": {
                 "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', format('cae-{0}', parameters('resourceToken')))]",
                 "configuration": {
@@ -456,12 +515,6 @@
                     "targetPort": 3000,
                     "transport": "auto"
                   },
-                  "registries": [
-                    {
-                      "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('resourceToken'))), '2023-07-01').loginServer]",
-                      "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken')))]"
-                    }
-                  ],
                   "secrets": [
                     {
                       "name": "session-secret",
@@ -477,15 +530,45 @@
                   "containers": [
                     {
                       "name": "frontend",
-                      "image": "[variables('placeholderImage')]",
+                      "image": "[parameters('frontendImage')]",
                       "resources": {
-                        "cpu": "[json('0.5')]",
-                        "memory": "1Gi"
+                        "cpu": "[json('0.25')]",
+                        "memory": "0.5Gi"
                       },
+                      "probes": [
+                        {
+                          "type": "Startup",
+                          "httpGet": {
+                            "path": "/",
+                            "port": 3000
+                          },
+                          "initialDelaySeconds": 3,
+                          "periodSeconds": 3,
+                          "failureThreshold": 20
+                        },
+                        {
+                          "type": "Liveness",
+                          "httpGet": {
+                            "path": "/",
+                            "port": 3000
+                          },
+                          "periodSeconds": 30,
+                          "failureThreshold": 3
+                        },
+                        {
+                          "type": "Readiness",
+                          "httpGet": {
+                            "path": "/",
+                            "port": 3000
+                          },
+                          "periodSeconds": 10,
+                          "failureThreshold": 3
+                        }
+                      ],
                       "env": [
                         {
                           "name": "NEXT_PUBLIC_BACKEND_URL",
-                          "value": "[format('https://{0}.{1}', variables('backendAppName'), reference(resourceId('Microsoft.App/managedEnvironments', format('cae-{0}', parameters('resourceToken'))), '2024-03-01').defaultDomain)]"
+                          "value": "[format('https://{0}.internal.{1}', variables('backendAppName'), reference(resourceId('Microsoft.App/managedEnvironments', format('cae-{0}', parameters('resourceToken'))), '2026-01-01').defaultDomain)]"
                         },
                         {
                           "name": "SESSION_SECRET",
@@ -500,23 +583,40 @@
                   ],
                   "scale": {
                     "minReplicas": 0,
-                    "maxReplicas": 2
+                    "maxReplicas": 2,
+                    "cooldownPeriod": 60,
+                    "pollingInterval": 30,
+                    "rules": [
+                      {
+                        "name": "http",
+                        "http": {
+                          "metadata": {
+                            "concurrentRequests": "10"
+                          }
+                        }
+                      },
+                      {
+                        "name": "daily-warm-window",
+                        "custom": {
+                          "type": "cron",
+                          "metadata": {
+                            "timezone": "Asia/Seoul",
+                            "start": "55 9 * * *",
+                            "end": "5 20 * * *",
+                            "desiredReplicas": "1"
+                          }
+                        }
+                      }
+                    ]
                   }
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('resourceToken')))]",
-                "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('resourceToken'))), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('resourceToken'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken'))), 'acrpull'))]",
-                "[resourceId('Microsoft.App/managedEnvironments', format('cae-{0}', parameters('resourceToken')))]",
-                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('resourceToken')))]"
+                "[resourceId('Microsoft.App/managedEnvironments', format('cae-{0}', parameters('resourceToken')))]"
               ]
             }
           ],
           "outputs": {
-            "acrLoginServer": {
-              "type": "string",
-              "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('resourceToken'))), '2023-07-01').loginServer]"
-            },
             "cosmosEndpoint": {
               "type": "string",
               "value": "[reference(resourceId('Microsoft.DocumentDB/databaseAccounts', format('cosmos-{0}', parameters('resourceToken'))), '2024-05-15').documentEndpoint]"
@@ -527,11 +627,11 @@
             },
             "backendUrl": {
               "type": "string",
-              "value": "[format('https://{0}.{1}', variables('backendAppName'), reference(resourceId('Microsoft.App/managedEnvironments', format('cae-{0}', parameters('resourceToken'))), '2024-03-01').defaultDomain)]"
+              "value": "[format('https://{0}.internal.{1}', variables('backendAppName'), reference(resourceId('Microsoft.App/managedEnvironments', format('cae-{0}', parameters('resourceToken'))), '2026-01-01').defaultDomain)]"
             },
             "frontendUrl": {
               "type": "string",
-              "value": "[format('https://{0}.{1}', variables('frontendAppName'), reference(resourceId('Microsoft.App/managedEnvironments', format('cae-{0}', parameters('resourceToken'))), '2024-03-01').defaultDomain)]"
+              "value": "[format('https://{0}.{1}', variables('frontendAppName'), reference(resourceId('Microsoft.App/managedEnvironments', format('cae-{0}', parameters('resourceToken'))), '2026-01-01').defaultDomain)]"
             }
           }
         }
@@ -542,10 +642,6 @@
     }
   ],
   "outputs": {
-    "AZURE_CONTAINER_REGISTRY_ENDPOINT": {
-      "type": "string",
-      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, format('rg-{0}', parameters('environmentName'))), 'Microsoft.Resources/deployments', 'resources'), '2025-04-01').outputs.acrLoginServer.value]"
-    },
     "COSMOS_ENDPOINT": {
       "type": "string",
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, format('rg-{0}', parameters('environmentName'))), 'Microsoft.Resources/deployments', 'resources'), '2025-04-01').outputs.cosmosEndpoint.value]"

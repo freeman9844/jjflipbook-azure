@@ -6,6 +6,8 @@
     "location": { "value": "${AZURE_LOCATION}" },
     "adminPassword": { "value": "${ADMIN_PASSWORD}" },
     "internalApiKey": { "value": "${INTERNAL_API_KEY}" },
-    "sessionSecret": { "value": "${SESSION_SECRET}" }
+    "sessionSecret": { "value": "${SESSION_SECRET}" },
+    "backendImage": { "value": "${BACKEND_IMAGE}" },
+    "frontendImage": { "value": "${FRONTEND_IMAGE}" }
   }
 }
