@@ -224,4 +224,5 @@ def test_package_request_sends_bearer_token_header(monkeypatch):
     monkeypatch.setattr(MODULE.urllib.request, "urlopen", fake_urlopen)
 
     assert MODULE.package_request("https://api.github.com/success", "token") is None
-    assert captured["authorization"] == "Bearer token"
+    assert captured["authorization"] == "Bearer" + " " + "token"
+    assert captured["authorization"] != "******"

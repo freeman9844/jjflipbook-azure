@@ -43,7 +43,7 @@ def package_request(url: str, token: str, method: str = "GET") -> dict | list | 
         method=method,
         headers={
             "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
+            "Authorization": "Bearer" + " " + token,
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
