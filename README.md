@@ -107,7 +107,7 @@ azd provision     # 인프라 프로비저닝 및 GHCR 이미지 기반 배포 �
 # Backend (기본 8000 포트)
 cd backend
 python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # Frontend (기본 3000 포트)

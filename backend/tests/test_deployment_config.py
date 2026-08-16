@@ -104,10 +104,56 @@ def test_frontend_backend_url_is_runtime_only():
 
 def test_frontend_container_uses_reproducible_node_22_build():
     dockerfile = (ROOT / "frontend" / "Dockerfile").read_text()
-    assert dockerfile.count("FROM node:22-alpine") == 2
+    node_image = (
+        "node:22-alpine@"
+        "sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32"
+    )
+    assert dockerfile.count(f"FROM {node_image}") == 2
     assert "RUN npm ci --legacy-peer-deps --loglevel=error" in dockerfile
     assert "RUN npm install" not in dockerfile
     assert "ENV NODE_ENV=production" in dockerfile
+
+
+def test_backend_base_image_and_runtime_dependencies_are_pinned():
+    dockerfile = (ROOT / "backend" / "Dockerfile").read_text()
+    python_image = (
+        "python:3.11-slim@"
+        "sha256:a630a63cdb314e2d138a2fca3e375e319e8568346ffafac5b980f888630ac4f1"
+    )
+    assert dockerfile.count(f"FROM {python_image}") == 2
+
+    runtime_requirements = (
+        ROOT / "backend" / "requirements.txt"
+    ).read_text().splitlines()
+    runtime_packages = {
+        line.split("==", 1)[0].lower()
+        for line in runtime_requirements
+        if line and not line.startswith("#")
+    }
+    assert all(
+        "==" in line
+        for line in runtime_requirements
+        if line and not line.startswith("#")
+    )
+    assert "pytest" not in runtime_packages
+    assert "httpx" not in runtime_packages
+    assert "pygments" not in runtime_packages
+    assert "python-dotenv" not in runtime_packages
+
+    development_requirements = (
+        ROOT / "backend" / "requirements-dev.txt"
+    ).read_text()
+    assert "-r requirements.txt" in development_requirements
+    assert "pytest==9.1.1" in development_requirements
+    assert "httpx==0.28.1" in development_requirements
+
+
+def test_frontend_prunes_only_incompatible_sharp_runtime_packages():
+    dockerfile = (ROOT / "frontend" / "Dockerfile").read_text()
+    assert ".next/standalone/node_modules/@img/sharp-linux-x64" in dockerfile
+    assert ".next/standalone/node_modules/@img/sharp-libvips-linux-x64" in dockerfile
+    assert "sharp-linuxmusl-x64" not in dockerfile
+    assert 'node -e "require(\'./.next/standalone/node_modules/sharp\')"' in dockerfile
 
 
 def test_bicep_uses_ghcr_image_parameters_and_has_no_acr():

@@ -1,5 +1,5 @@
 # Stage 1: Builder — bcrypt 등 C 확장 컴파일용 빌드 도구 포함
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim@sha256:a630a63cdb314e2d138a2fca3e375e319e8568346ffafac5b980f888630ac4f1 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential gcc \
@@ -9,7 +9,7 @@ COPY requirements.txt .
 RUN pip install --prefix=/install --no-cache-dir -r requirements.txt
 
 # Stage 2: Runtime — 런타임 의존성만, build 도구 없음
-FROM python:3.11-slim AS runtime
+FROM python:3.11-slim@sha256:a630a63cdb314e2d138a2fca3e375e319e8568346ffafac5b980f888630ac4f1 AS runtime
 LABEL org.opencontainers.image.source="https://github.com/freeman9844/jjflipbook-azure"
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
