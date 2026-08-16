@@ -254,6 +254,18 @@ resource backendApp 'Microsoft.App/containerApps@2026-01-01' = {
               metadata: { concurrentRequests: '1' }
             }
           }
+          {
+            name: 'daily-warm-window'
+            custom: {
+              type: 'cron'
+              metadata: {
+                timezone: 'Asia/Seoul'
+                start: '55 9 * * *'
+                end: '5 20 * * *'
+                desiredReplicas: '1'
+              }
+            }
+          }
         ]
       }
     }

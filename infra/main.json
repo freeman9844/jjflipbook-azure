@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "9266920449650958099"
+      "templateHash": "3057710503791638656"
     }
   },
   "parameters": {
@@ -103,7 +103,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "12261628274536993052"
+              "templateHash": "4512110716050429047"
             }
           },
           "parameters": {
@@ -484,6 +484,18 @@
                         "http": {
                           "metadata": {
                             "concurrentRequests": "1"
+                          }
+                        }
+                      },
+                      {
+                        "name": "daily-warm-window",
+                        "custom": {
+                          "type": "cron",
+                          "metadata": {
+                            "timezone": "Asia/Seoul",
+                            "start": "55 9 * * *",
+                            "end": "5 20 * * *",
+                            "desiredReplicas": "1"
                           }
                         }
                       }

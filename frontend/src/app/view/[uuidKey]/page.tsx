@@ -179,6 +179,8 @@ export default function FlipbookViewer({ params }: { params: Promise<{ uuidKey: 
                                     <img
                                         src={url}
                                         alt={`Page ${index + 1}`}
+                                        loading={index < 2 ? 'eager' : 'lazy'}
+                                        fetchPriority={index === 0 ? 'high' : 'auto'}
                                         style={styles.pageImage}
                                     />
                                     {overlays

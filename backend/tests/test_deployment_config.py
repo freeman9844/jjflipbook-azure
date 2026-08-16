@@ -167,6 +167,16 @@ def test_bicep_defines_selected_scaling_policy():
         ]
         == "1"
     )
+    backend_cron_rule = _find_scale_rule(
+        backend_app, "daily-warm-window"
+    )["custom"]
+    assert backend_cron_rule["type"] == "cron"
+    assert backend_cron_rule["metadata"] == {
+        "timezone": "Asia/Seoul",
+        "start": "55 9 * * *",
+        "end": "5 20 * * *",
+        "desiredReplicas": "1",
+    }
     assert _find_scale_rule(frontend_app, "http")["http"]["metadata"] == {
         "concurrentRequests": "10"
     }
