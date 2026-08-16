@@ -66,6 +66,15 @@ def find_app_names(resource_group: str) -> dict[str, str]:
     return result
 
 
+def immutable_tag_from_image_ref(image: str) -> str:
+    reference = image.split("@", 1)[0]
+    final_segment = reference.rsplit("/", 1)[-1]
+    repository, separator, tag = final_segment.partition(":")
+    if not repository or not separator or not tag:
+        raise RuntimeError(f"Revision image has no immutable tag: {image}")
+    return tag
+
+
 def protected_revision_tags(resource_group: str, app_name: str) -> set[str]:
     revisions = run_az(
         "containerapp",
@@ -84,10 +93,7 @@ def protected_revision_tags(resource_group: str, app_name: str) -> set[str]:
     for revision in revisions[:2]:
         containers = revision["properties"]["template"]["containers"]
         for container in containers:
-            image = container["image"]
-            if ":" not in image:
-                raise RuntimeError(f"Revision image has no immutable tag: {image}")
-            tags.add(image.rsplit(":", 1)[1])
+            tags.add(immutable_tag_from_image_ref(container["image"]))
     return tags
 
 

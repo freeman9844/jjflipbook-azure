@@ -76,15 +76,71 @@ def test_protected_revision_tags_uses_two_newest_revisions(monkeypatch):
     assert MODULE.protected_revision_tags("rg-env", "app-name") == {"sha-3", "sha-2"}
 
 
+def test_protected_revision_tags_extracts_tag_from_digest_pinned_images(monkeypatch):
+    monkeypatch.setattr(
+        MODULE,
+        "run_az",
+        lambda *args: [
+            revision(
+                "2026-08-03T00:00:00Z",
+                "ghcr.io/owner/app:sha-tag@sha256:deadbeef",
+            ),
+            revision(
+                "2026-08-02T00:00:00Z",
+                "registry.example:5443/owner/app:port-tag@sha256:beadfeed",
+            ),
+        ],
+    )
+
+    assert MODULE.protected_revision_tags("rg-env", "app-name") == {
+        "sha-tag",
+        "port-tag",
+    }
+
+
 def test_protected_revision_tags_rejects_images_without_tags(monkeypatch):
     monkeypatch.setattr(
         MODULE,
         "run_az",
-        lambda *args: [revision("2026-08-03T00:00:00Z", "ghcr.io/owner/app")],
+        lambda *args: [
+            revision(
+                "2026-08-03T00:00:00Z",
+                "ghcr.io/owner/app@sha256:deadbeef",
+            )
+        ],
     )
 
     with pytest.raises(RuntimeError, match="no immutable tag"):
         MODULE.protected_revision_tags("rg-env", "app-name")
+
+
+def test_find_app_names_rejects_zero_matches(monkeypatch):
+    monkeypatch.setattr(
+        MODULE,
+        "run_az",
+        lambda *args: [{"name": "aca-unrelated"}],
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Expected one backend Container App, found \\[\\]",
+    ):
+        MODULE.find_app_names("rg-env")
+
+
+def test_find_app_names_rejects_multiple_matches(monkeypatch):
+    monkeypatch.setattr(
+        MODULE,
+        "run_az",
+        lambda *args: [
+            {"name": "aca-backend-primary"},
+            {"name": "aca-backend-secondary"},
+            {"name": "aca-frontend"},
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="Expected one backend Container App"):
+        MODULE.find_app_names("rg-env")
 
 
 def test_list_package_versions_paginates_until_final_page(monkeypatch):
