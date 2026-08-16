@@ -48,6 +48,8 @@ jobs:
           file: ./backend/Dockerfile
           push: true
           platforms: linux/amd64
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
           tags: ${{ env.BACKEND_IMAGE }}
       - name: Build and push frontend image
         uses: docker/build-push-action@v6
@@ -56,6 +58,8 @@ jobs:
           file: ./frontend/Dockerfile
           push: true
           platforms: linux/amd64
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
           tags: ${{ env.FRONTEND_IMAGE }}
       - name: Verify images are public
         run: |

@@ -102,6 +102,14 @@ def test_frontend_backend_url_is_runtime_only():
     assert "ENV NEXT_PUBLIC_BACKEND_URL" not in dockerfile
 
 
+def test_frontend_container_uses_reproducible_node_22_build():
+    dockerfile = (ROOT / "frontend" / "Dockerfile").read_text()
+    assert dockerfile.count("FROM node:22-alpine") == 2
+    assert "RUN npm ci --legacy-peer-deps --loglevel=error" in dockerfile
+    assert "RUN npm install" not in dockerfile
+    assert "ENV NODE_ENV=production" in dockerfile
+
+
 def test_bicep_uses_ghcr_image_parameters_and_has_no_acr():
     main = (ROOT / "infra" / "main.bicep").read_text()
     resources = (ROOT / "infra" / "resources.bicep").read_text()
@@ -254,6 +262,17 @@ def test_workflow_builds_ghcr_and_previews_before_provisioning():
         "azd provision --preview --no-prompt",
         "azd provision --no-prompt",
     )
+
+
+def test_workflow_uses_separate_buildkit_cache_scopes():
+    workflow = _load_workflow()
+    backend_step = _workflow_step(workflow, "Build and push backend image")
+    frontend_step = _workflow_step(workflow, "Build and push frontend image")
+
+    assert "cache-from: type=gha,scope=backend" in backend_step
+    assert "cache-to: type=gha,mode=max,scope=backend" in backend_step
+    assert "cache-from: type=gha,scope=frontend" in frontend_step
+    assert "cache-to: type=gha,mode=max,scope=frontend" in frontend_step
 
 
 def test_workflow_exports_smoke_attestation_through_github_env():
