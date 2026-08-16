@@ -1,7 +1,7 @@
 # Azure Container Apps Cost Optimization Design
 
-**Date:** 2026-08-16  
-**Status:** Approved design  
+**Date:** 2026-08-16
+**Status:** Approved design
 **Scope:** `rg-jjflipbook` in subscription `e9c89382-b9fd-4856-8ae4-647988d62a44`
 
 ## 1. Goals
