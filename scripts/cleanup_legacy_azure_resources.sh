@@ -5,6 +5,18 @@ set -euo pipefail
 : "${FRONTEND_URL:?FRONTEND_URL is required}"
 : "${SMOKE_ATTESTATION_FILE:?SMOKE_ATTESTATION_FILE is required}"
 RESOURCE_GROUP="rg-$AZURE_ENV_NAME"
+REVISION_VERIFY_ATTEMPTS="${REVISION_VERIFY_ATTEMPTS:-12}"
+REVISION_VERIFY_DELAY_SECONDS="${REVISION_VERIFY_DELAY_SECONDS:-5}"
+
+if [[ ! "$REVISION_VERIFY_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "REVISION_VERIFY_ATTEMPTS must be a positive integer." >&2
+  exit 1
+fi
+
+if [[ ! "$REVISION_VERIFY_DELAY_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "REVISION_VERIFY_DELAY_SECONDS must be a non-negative integer." >&2
+  exit 1
+fi
 
 if [[ ! -f "$SMOKE_ATTESTATION_FILE" || -L "$SMOKE_ATTESTATION_FILE" ]]; then
   echo "Refusing cleanup: smoke attestation file must be a regular file." >&2
@@ -29,23 +41,32 @@ if (( ${#CONTAINER_APPS[@]} == 0 )); then
 fi
 
 for container_app in "${CONTAINER_APPS[@]}"; do
-  ACTIVE_IMAGES="$(
-    az containerapp revision list \
-      --resource-group "$RESOURCE_GROUP" \
-      --name "$container_app" \
-      --output json |
-      jq -r '.[] | select(.properties.active == true) | .properties.template.containers[]? | .image // empty'
-  )"
+  for (( attempt = 1; attempt <= REVISION_VERIFY_ATTEMPTS; attempt++ )); do
+    ACTIVE_IMAGES="$(
+      az containerapp revision list \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$container_app" \
+        --output json |
+        jq -r '.[] | select(.properties.active == true) | .properties.template.containers[]? | .image // empty'
+    )"
 
-  if [[ -z "$ACTIVE_IMAGES" ]]; then
-    echo "Refusing cleanup: $container_app has no active revision images." >&2
-    exit 1
-  fi
+    if [[ -n "$ACTIVE_IMAGES" ]] &&
+      ! grep -v '^ghcr\.io/freeman9844/' <<<"$ACTIVE_IMAGES" >/dev/null; then
+      break
+    fi
 
-  if grep -v '^ghcr\.io/freeman9844/' <<<"$ACTIVE_IMAGES" >/dev/null; then
-    echo "Refusing cleanup: every active image for $container_app must use public GHCR." >&2
-    exit 1
-  fi
+    if (( attempt == REVISION_VERIFY_ATTEMPTS )); then
+      if [[ -z "$ACTIVE_IMAGES" ]]; then
+        echo "Refusing cleanup: $container_app has no active revision images." >&2
+      else
+        echo "Refusing cleanup: every active image for $container_app must use public GHCR." >&2
+      fi
+      exit 1
+    fi
+
+    echo "Waiting for $container_app active revisions to converge on public GHCR ($attempt/$REVISION_VERIFY_ATTEMPTS)..."
+    sleep "$REVISION_VERIFY_DELAY_SECONDS"
+  done
 done
 
 mapfile -t ACR_NAMES < <(

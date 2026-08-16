@@ -1,5 +1,7 @@
 import json
+import os
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -315,3 +317,66 @@ def test_workflow_wires_ghcr_cleanup_environment():
     assert "AZURE_ENV_NAME: ${{ env.AZURE_ENV_NAME }}" in ghcr_cleanup_step
     assert "GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}" in ghcr_cleanup_step
     assert "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in ghcr_cleanup_step
+
+
+def test_legacy_cleanup_waits_for_active_revisions_to_converge(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    counter = tmp_path / "revision-calls"
+    fake_az = fake_bin / "az"
+    fake_az.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$1 $2" == "containerapp list" ]]; then
+  printf '%s\n' '[{{"name":"ca-backend"}}]'
+elif [[ "$1 $2 $3" == "containerapp revision list" ]]; then
+  calls=0
+  [[ -f "{counter}" ]] && calls="$(cat "{counter}")"
+  calls=$((calls + 1))
+  printf '%s' "$calls" > "{counter}"
+  if (( calls == 1 )); then
+    printf '%s\n' '[{{"properties":{{"active":true,"template":{{"containers":[{{"image":"acr.example/legacy:old"}}]}}}}}},{{"properties":{{"active":true,"template":{{"containers":[{{"image":"ghcr.io/freeman9844/backend:new"}}]}}}}}}]'
+  else
+    printf '%s\n' '[{{"properties":{{"active":true,"template":{{"containers":[{{"image":"ghcr.io/freeman9844/backend:new"}}]}}}}}}]'
+  fi
+elif [[ "$1 $2" == "acr list" || "$1 $2" == "identity list" ]]; then
+  printf '%s\n' '[]'
+else
+  printf 'Unexpected az invocation: %s\n' "$*" >&2
+  exit 2
+fi
+"""
+    )
+    fake_az.chmod(0o755)
+
+    attestation = tmp_path / "attestation.json"
+    attestation.write_text(
+        json.dumps(
+            {
+                "completed": True,
+                "FRONTEND_URL": "https://frontend.example",
+            }
+        )
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "AZURE_ENV_NAME": "jjflipbook",
+            "FRONTEND_URL": "https://frontend.example",
+            "SMOKE_ATTESTATION_FILE": str(attestation),
+            "REVISION_VERIFY_ATTEMPTS": "2",
+            "REVISION_VERIFY_DELAY_SECONDS": "0",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "cleanup_legacy_azure_resources.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert counter.read_text() == "2"
