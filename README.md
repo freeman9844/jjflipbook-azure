@@ -217,7 +217,13 @@ cd frontend && npx jest
 
 ## 🔄 CI/CD (GitHub Actions)
 
-`azd pipeline config`로 구성된 `.github/workflows/azure-dev.yml`이 `main` 브랜치 push마다 `azd provision` + `azd deploy`를 실행합니다.
+GitHub Actions 워크플로우(`main` 브랜치 push 시 자동 실행)를 통해 다음 단계로 무중단 배포 및 관리가 수행됩니다:
+
+1. **빌드 및 푸시 (GHCR SHA Tag)**: GitHub Actions가 소스코드를 기반으로 Docker 이미지를 빌드하고, 커밋 SHA 값(`commit-SHA`)을 태그로 지정하여 **GHCR (GitHub Container Registry)** 공개 패키지에 푸시합니다.
+2. **미리보기 및 검증 (Preview)**: 새로 푸시된 불변(Immutable) 이미지 태그를 바탕으로 스테이징/미리보기 배포 및 유효성 검증을 거칩니다.
+3. **프로비저닝 (azd provision)**: `azd deploy`를 호출하는 대신, 인프라 변경사항 반영 및 새로 빌드된 커밋 SHA 이미지 배포를 `azd provision` 단일 단계로 실행하여 인프라와 컨테이너 구성을 동기화합니다.
+4. **스모크 테스트 (Smoke Test)**: 배포 완료 후 핵심 기능 동작(로그인, 파일 변환 등)에 대한 스모크 테스트를 실행하여 정상 동작을 확인합니다.
+5. **정리 및 정리 정책 (Cleanup)**: GHCR 패키지 저장 공간 및 비용 최적화를 위해 정리 자동화가 실행됩니다. 이 정책은 **가장 최신의 5개 패키지 버전**과 **현재 가동 중인 최신 2개의 Azure Container Apps(ACA) 리비전이 참조하고 있는 태그 및 버전**을 안전하게 보존(Retention)하고, 그 외 오래된 이미지들을 삭제합니다.
 
 - **인증**: Azure 관리 ID(`msi-jjflipbook-azure`) + GitHub OIDC **federated credentials** — 저장소에 클라이언트 시크릿 없음
 - **저장소 변수**: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_ENV_NAME`, `AZURE_LOCATION`
@@ -239,7 +245,7 @@ cd frontend && npx jest
 Blob 컨테이너의 공개 접근을 차단할 수 있습니다. 이 저장소의 Bicep은 다음 두 가지 방식으로 이를 처리합니다:
 
 - **리소스 그룹 태그 `SecurityControl: Ignore`** — MCAPS 정책 예외 태그를 RG에 설정하여
-  `azd up` 후 Cosmos의 공개 네트워크 접근이 유지됩니다.
+`azd provision` 후 Cosmos의 공개 네트워크 접근이 유지됩니다.
 - **SAS URL 기반 Blob 접근** — Blob 컨테이너는 의도적으로 비공개(`publicAccess: None`)이며,
   공개 사용자는 컨테이너를 나열할 수 없습니다. 모든 이미지·PDF·BGM 접근은 백엔드가 발급하는
   exact-blob read-only User-Delegation SAS URL을 통해 이루어집니다
