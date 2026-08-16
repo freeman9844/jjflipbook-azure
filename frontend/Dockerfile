@@ -9,13 +9,11 @@ ENV NPM_CONFIG_FUND=false
 RUN npm install --legacy-peer-deps --loglevel=error
 COPY . .
 
-# 빌드 시점에 백엔드 Cloud Run URL을 주입 (정적 JS 파일에 구워짐)
-ARG NEXT_PUBLIC_BACKEND_URL
-ENV NEXT_PUBLIC_BACKEND_URL=$NEXT_PUBLIC_BACKEND_URL
-
+# 런타임 시점에 백엔드 URL이 Container App에 주입됨
 RUN npm run build
 
 FROM node:20-alpine AS runner
+LABEL org.opencontainers.image.source="https://github.com/freeman9844/jjflipbook-azure"
 WORKDIR /app
 ENV NODE_ENV production
 

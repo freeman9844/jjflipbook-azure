@@ -10,6 +10,7 @@ RUN pip install --prefix=/install --no-cache-dir -r requirements.txt
 
 # Stage 2: Runtime — 런타임 의존성만, build 도구 없음
 FROM python:3.11-slim AS runtime
+LABEL org.opencontainers.image.source="https://github.com/freeman9844/jjflipbook-azure"
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
@@ -18,4 +19,4 @@ COPY --from=builder /install /usr/local
 WORKDIR /app
 COPY . .
 EXPOSE 8080
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--no-access-log"]
