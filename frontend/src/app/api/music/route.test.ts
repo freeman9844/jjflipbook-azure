@@ -27,31 +27,30 @@ describe('GET /api/music', () => {
         const body = await res.json();
         expect(body.files).toEqual(mockFiles);
 
-        const calledUrl = (global.fetch as jest.Mock).mock.calls[0][0] as string;
-        expect(calledUrl).toBe(`${BACKEND_URL}/music/list`);
+        expect(global.fetch).toHaveBeenCalledWith(
+            `${BACKEND_URL}/music/list`,
+            { cache: 'no-store' },
+        );
     });
 
-    it('returns empty list when NEXT_PUBLIC_BACKEND_URL is not set', async () => {
+    it('returns 503 when backend configuration is missing', async () => {
         delete process.env.NEXT_PUBLIC_BACKEND_URL;
-        const res = await GET();
-        const body = await res.json();
-        expect(body.files).toEqual([]);
+        const response = await GET();
+        expect(response.status).toBe(503);
     });
 
-    it('returns empty list when backend fetch fails', async () => {
+    it('returns 502 when backend fetch fails', async () => {
         global.fetch = jest.fn().mockRejectedValue(new Error('network error')) as jest.Mock;
-        const res = await GET();
-        const body = await res.json();
-        expect(body.files).toEqual([]);
+        const response = await GET();
+        expect(response.status).toBe(502);
     });
 
-    it('returns empty list when backend returns non-ok status', async () => {
+    it('preserves backend failure status', async () => {
         global.fetch = jest.fn().mockResolvedValue({
             ok: false,
+            status: 503,
         }) as jest.Mock;
-        const res = await GET();
-        const body = await res.json();
-        expect(body.files).toEqual([]);
+        const response = await GET();
+        expect(response.status).toBe(503);
     });
 });
-

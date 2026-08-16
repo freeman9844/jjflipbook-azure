@@ -11,6 +11,7 @@ describe('/api/backend proxy sessions', () => {
   });
 
   afterEach(() => {
+    jest.useRealTimers();
     delete process.env.SESSION_SECRET;
     delete process.env.INTERNAL_API_KEY;
     delete process.env.NEXT_PUBLIC_BACKEND_URL;
@@ -76,5 +77,50 @@ describe('/api/backend proxy sessions', () => {
       username: 'admin',
     }));
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('returns 504 when a backend GET exceeds thirty seconds', async () => {
+    jest.useFakeTimers();
+    global.fetch = jest.fn((_url, init) => new Promise((_resolve, reject) => {
+      const signal = (init as RequestInit).signal;
+      signal?.addEventListener('abort', () => {
+        reject(new DOMException('Aborted', 'AbortError'));
+      });
+    })) as jest.Mock;
+
+    let settled = false;
+    const responsePromise = GET(
+      new NextRequest('https://frontend/api/backend/flipbook/book-1'),
+      { params: Promise.resolve({ path: ['flipbook', 'book-1'] }) },
+    );
+    void responsePromise.finally(() => {
+      settled = true;
+    });
+    await jest.advanceTimersByTimeAsync(30000);
+    expect(settled).toBe(true);
+    if (!settled) {
+      return;
+    }
+    const response = await responsePromise;
+
+    expect(response.status).toBe(504);
+    expect(await response.json()).toEqual({
+      error: 'Backend request timed out',
+    });
+    jest.useRealTimers();
+  });
+
+  it('returns 502 when a backend GET connection fails', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new TypeError('fetch failed'));
+
+    const response = await GET(
+      new NextRequest('https://frontend/api/backend/flipbook/book-1'),
+      { params: Promise.resolve({ path: ['flipbook', 'book-1'] }) },
+    );
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: 'Backend connection failed',
+    });
   });
 });

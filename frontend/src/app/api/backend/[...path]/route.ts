@@ -53,17 +53,37 @@ export async function GET(
 
     const searchParams = request.nextUrl.search;
     const url = `${backendUrl()}/${pathStr}${searchParams}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     try {
-        const res = await fetch(url, { cache: 'no-store' });
+        const res = await fetch(url, {
+            cache: 'no-store',
+            signal: controller.signal,
+        });
         const responseContentType = res.headers.get('content-type') || '';
         const data = responseContentType.includes('application/json')
             ? await res.json()
             : { message: await res.text() };
         return NextResponse.json(data, { status: res.status });
     } catch (error) {
-        const message = error instanceof Error ? error.message : 'Internal proxy error';
-        return NextResponse.json({ error: message }, { status: 500 });
+        if (
+            typeof error === 'object' &&
+            error !== null &&
+            'name' in error &&
+            error.name === 'AbortError'
+        ) {
+            return NextResponse.json(
+                { error: 'Backend request timed out' },
+                { status: 504 },
+            );
+        }
+        return NextResponse.json(
+            { error: 'Backend connection failed' },
+            { status: 502 },
+        );
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
 
