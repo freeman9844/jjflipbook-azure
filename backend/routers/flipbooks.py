@@ -32,6 +32,14 @@ def _sign_doc(doc: dict) -> dict:
     return doc
 
 
+def _sign_summary_doc(doc: dict) -> dict:
+    summary = dict(doc)
+    summary.pop("error_message", None)
+    cover_urls = summary.get("image_urls") or []
+    summary["image_urls"] = [sign_url(cover_urls[0])] if cover_urls else []
+    return summary
+
+
 def _read_flipbook_or_404(uuid_key: str) -> dict:
     try:
         return get_container("flipbooks").read_item(item=uuid_key, partition_key=uuid_key)
@@ -82,10 +90,24 @@ async def upload_pdf(
 @router.get("/flipbooks")
 def list_flipbooks():
     docs = get_container("flipbooks").query_items(
-        query="SELECT * FROM c ORDER BY c.created_at DESC OFFSET 0 LIMIT 50",
+        query="""
+        SELECT
+            c.id,
+            c.uuid_key,
+            c.title,
+            c.folder_id,
+            c.user_id,
+            c.page_count,
+            c.created_at,
+            c.status,
+            ARRAY_SLICE(c.image_urls, 0, 1) AS image_urls
+        FROM c
+        ORDER BY c.created_at DESC
+        OFFSET 0 LIMIT 50
+        """,
         enable_cross_partition_query=True,
     )
-    return [_sign_doc(doc) for doc in docs]
+    return [_sign_summary_doc(doc) for doc in docs]
 
 
 @router.get("/flipbook/{uuid_key}")
