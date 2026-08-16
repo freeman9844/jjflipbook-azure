@@ -139,6 +139,7 @@ def test_backend_base_image_and_runtime_dependencies_are_pinned():
     assert "httpx" not in runtime_packages
     assert "pygments" not in runtime_packages
     assert "python-dotenv" not in runtime_packages
+    assert "packaging" in runtime_packages
 
     development_requirements = (
         ROOT / "backend" / "requirements-dev.txt"
