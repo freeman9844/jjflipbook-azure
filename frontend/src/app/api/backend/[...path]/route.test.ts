@@ -123,4 +123,44 @@ describe('/api/backend proxy sessions', () => {
       error: 'Backend connection failed',
     });
   });
+
+  it('preserves completed backend GET JSON status and body', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      headers: new Headers({ 'content-type': 'application/json' }),
+      status: 418,
+      json: async () => ({
+        message: 'teapot',
+        detail: 'brew required',
+      }),
+    }) as jest.Mock;
+
+    const response = await GET(
+      new NextRequest('https://frontend/api/backend/flipbook/book-1'),
+      { params: Promise.resolve({ path: ['flipbook', 'book-1'] }) },
+    );
+
+    expect(response.status).toBe(418);
+    expect(await response.json()).toEqual({
+      message: 'teapot',
+      detail: 'brew required',
+    });
+  });
+
+  it('preserves completed backend GET text status and wraps the body', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      headers: new Headers({ 'content-type': 'text/plain' }),
+      status: 503,
+      text: async () => 'service unavailable',
+    }) as jest.Mock;
+
+    const response = await GET(
+      new NextRequest('https://frontend/api/backend/flipbook/book-1'),
+      { params: Promise.resolve({ path: ['flipbook', 'book-1'] }) },
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      message: 'service unavailable',
+    });
+  });
 });
