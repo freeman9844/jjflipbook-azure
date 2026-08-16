@@ -5,6 +5,56 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _load_generated_template():
+    return json.loads((ROOT / "infra" / "main.json").read_text())
+
+
+def _iter_resource_tree(resource):
+    yield resource
+
+    for child in resource.get("resources", []):
+        yield from _iter_resource_tree(child)
+
+    nested_template = resource.get("properties", {}).get("template")
+    if isinstance(nested_template, dict):
+        yield from _iter_resources(nested_template)
+
+
+def _iter_resources(template):
+    for resource in template.get("resources", []):
+        yield from _iter_resource_tree(resource)
+
+
+def _resources_of_type(template, resource_type):
+    return [
+        resource
+        for resource in _iter_resources(template)
+        if resource.get("type") == resource_type
+    ]
+
+
+def _find_container_app(template, container_name):
+    matches = [
+        resource
+        for resource in _resources_of_type(template, "Microsoft.App/containerApps")
+        if any(
+            container.get("name") == container_name
+            for container in resource["properties"]["template"]["containers"]
+        )
+    ]
+
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _find_scale_rule(app, rule_name):
+    rules = app["properties"]["template"]["scale"]["rules"]
+    matches = [rule for rule in rules if rule.get("name") == rule_name]
+
+    assert len(matches) == 1
+    return matches[0]
+
+
 def test_backend_disables_uvicorn_access_log():
     dockerfile = (ROOT / "backend" / "Dockerfile").read_text()
     assert '"--no-access-log"' in dockerfile
@@ -28,6 +78,9 @@ def test_frontend_backend_url_is_runtime_only():
 def test_bicep_uses_ghcr_image_parameters_and_has_no_acr():
     main = (ROOT / "infra" / "main.bicep").read_text()
     resources = (ROOT / "infra" / "resources.bicep").read_text()
+    template = _load_generated_template()
+    backend_app = _find_container_app(template, "backend")
+    frontend_app = _find_container_app(template, "frontend")
 
     assert "param backendImage string" in main
     assert "param frontendImage string" in main
@@ -39,29 +92,84 @@ def test_bicep_uses_ghcr_image_parameters_and_has_no_acr():
     assert "AcrPull" not in resources
     assert "id-frontend-" not in resources
     assert "AZURE_CONTAINER_REGISTRY_ENDPOINT" not in main
+    assert not _resources_of_type(template, "Microsoft.ContainerRegistry/registries")
+    assert backend_app["identity"]["type"] == "UserAssigned"
+    assert backend_app["identity"]["userAssignedIdentities"]
+    assert "registries" not in backend_app["properties"]["configuration"]
+    assert "identity" not in frontend_app
+    assert "registries" not in frontend_app["properties"]["configuration"]
 
 
 def test_bicep_defines_selected_scaling_policy():
-    resources = (ROOT / "infra" / "resources.bicep").read_text()
+    template = _load_generated_template()
+    backend_app = _find_container_app(template, "backend")
+    frontend_app = _find_container_app(template, "frontend")
 
-    assert "cpu: json('0.25')" in resources
-    assert "memory: '0.5Gi'" in resources
-    assert "cooldownPeriod: 60" in resources
-    assert "timezone: 'Asia/Seoul'" in resources
-    assert "start: '55 9 * * *'" in resources
-    assert "end: '5 20 * * *'" in resources
-    assert "desiredReplicas: '1'" in resources
-    assert resources.count("type: 'cron'") == 1
+    managed_environments = _resources_of_type(
+        template, "Microsoft.App/managedEnvironments"
+    )
+    container_apps = _resources_of_type(template, "Microsoft.App/containerApps")
+    assert len(managed_environments) == 1
+    assert managed_environments[0]["apiVersion"] == "2026-01-01"
+    assert len(container_apps) == 2
+    assert {app["apiVersion"] for app in container_apps} == {"2026-01-01"}
+
+    backend_ingress = backend_app["properties"]["configuration"]["ingress"]
+    frontend_ingress = frontend_app["properties"]["configuration"]["ingress"]
+    assert backend_ingress["external"] is False
+    assert frontend_ingress["external"] is True
+
+    backend_container = backend_app["properties"]["template"]["containers"][0]
+    frontend_container = frontend_app["properties"]["template"]["containers"][0]
+    assert backend_container["resources"]["cpu"] == "[json('1.0')]"
+    assert backend_container["resources"]["memory"] == "2Gi"
+    assert frontend_container["resources"]["cpu"] == "[json('0.25')]"
+    assert frontend_container["resources"]["memory"] == "0.5Gi"
+
+    backend_scale = backend_app["properties"]["template"]["scale"]
+    frontend_scale = frontend_app["properties"]["template"]["scale"]
+    for scale in (backend_scale, frontend_scale):
+        assert scale["minReplicas"] == 0
+        assert scale["maxReplicas"] == 2
+        assert scale["cooldownPeriod"] == 60
+        assert scale["pollingInterval"] == 30
+
+    assert (
+        _find_scale_rule(backend_app, "http-single")["http"]["metadata"][
+            "concurrentRequests"
+        ]
+        == "1"
+    )
+    assert _find_scale_rule(frontend_app, "http")["http"]["metadata"] == {
+        "concurrentRequests": "10"
+    }
+
+    cron_rule = _find_scale_rule(frontend_app, "daily-warm-window")["custom"]
+    assert cron_rule["type"] == "cron"
+    assert cron_rule["metadata"] == {
+        "timezone": "Asia/Seoul",
+        "start": "55 9 * * *",
+        "end": "5 20 * * *",
+        "desiredReplicas": "1",
+    }
 
 
 def test_bicep_disables_defender_only_at_storage_scope():
     resources = (ROOT / "infra" / "resources.bicep").read_text()
+    template = _load_generated_template()
+    defender_resources = _resources_of_type(
+        template, "Microsoft.Security/defenderForStorageSettings"
+    )
 
     assert "Microsoft.Security/defenderForStorageSettings@2025-06-01" in resources
     assert "scope: storage" in resources
-    assert "name: 'current'" in resources
-    assert "isEnabled: false" in resources
-    assert "overrideSubscriptionLevelSettings: true" in resources
+    assert len(defender_resources) == 1
+    assert defender_resources[0]["name"] == "current"
+    assert defender_resources[0]["properties"] == {
+        "isEnabled": False,
+        "overrideSubscriptionLevelSettings": True,
+    }
+    assert "Microsoft.Storage/storageAccounts" in defender_resources[0]["scope"]
 
 
 def test_parameter_file_maps_immutable_images():
