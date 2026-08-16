@@ -125,9 +125,13 @@ def sign_url(url: str) -> str:
     )
     unsigned_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
     signed_url = f"{unsigned_url}?{token}"
+    cache_expiry = now + _SIGNED_URL_CACHE_TTL
     with _sas_cache_lock:
+        cached = _signed_url_cache.get(blob_name)
+        if cached and cached[1] >= cache_expiry:
+            return cached[0]
         _signed_url_cache[blob_name] = (
             signed_url,
-            now + _SIGNED_URL_CACHE_TTL,
+            cache_expiry,
         )
-    return signed_url
+        return signed_url
