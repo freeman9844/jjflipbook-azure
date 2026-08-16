@@ -10,6 +10,29 @@ PACKAGES = {
     "frontend": "jjflipbook-azure-frontend",
 }
 
+ROLLBACK_USABLE = "usable"
+ROLLBACK_AMBIGUOUS = "ambiguous"
+ROLLBACK_UNUSABLE = "unusable"
+
+HEALTHY_HEALTH_STATES = {"healthy"}
+FAILED_HEALTH_STATES = {"unhealthy"}
+
+USABLE_RUNNING_STATES = {
+    "running",
+    "running (at max)",
+    "scale to 0",
+    "scaling / processing",
+}
+FAILED_RUNNING_STATES = {
+    "activation failed",
+    "degraded",
+    "deprovisioning",
+    "failed",
+}
+
+USABLE_PROVISIONING_STATES = {"provisioned", "succeeded"}
+FAILED_PROVISIONING_STATES = {"failed", "provisioning failed"}
+
 
 def version_ids_to_delete(
     versions: list[dict], protected_tags: set[str], keep: int = 5
@@ -75,6 +98,48 @@ def immutable_tag_from_image_ref(image: str) -> str:
     return tag
 
 
+def normalize_status(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return " ".join(value.strip().lower().split())
+
+
+def rollback_state(revision: dict) -> str:
+    properties = revision.get("properties", {})
+    health = normalize_status(properties.get("healthState"))
+    running = normalize_status(properties.get("runningState"))
+    provisioning = normalize_status(properties.get("provisioningState"))
+
+    if (
+        health in FAILED_HEALTH_STATES
+        or running in FAILED_RUNNING_STATES
+        or provisioning in FAILED_PROVISIONING_STATES
+    ):
+        return ROLLBACK_UNUSABLE
+
+    if (
+        health in HEALTHY_HEALTH_STATES
+        and (
+            running in USABLE_RUNNING_STATES
+            or provisioning in USABLE_PROVISIONING_STATES
+        )
+    ) or (
+        running in USABLE_RUNNING_STATES
+        and provisioning in USABLE_PROVISIONING_STATES
+    ):
+        return ROLLBACK_USABLE
+
+    return ROLLBACK_AMBIGUOUS
+
+
+def revision_tags(revision: dict) -> set[str]:
+    containers = revision["properties"]["template"]["containers"]
+    return {
+        immutable_tag_from_image_ref(container["image"])
+        for container in containers
+    }
+
+
 def protected_revision_tags(resource_group: str, app_name: str) -> set[str]:
     revisions = run_az(
         "containerapp",
@@ -90,10 +155,18 @@ def protected_revision_tags(resource_group: str, app_name: str) -> set[str]:
         reverse=True,
     )
     tags = set()
-    for revision in revisions[:2]:
-        containers = revision["properties"]["template"]["containers"]
-        for container in containers:
-            tags.add(immutable_tag_from_image_ref(container["image"]))
+    for revision in revisions:
+        if revision.get("properties", {}).get("active") is True:
+            tags.update(revision_tags(revision))
+    for revision in revisions:
+        if revision.get("properties", {}).get("active") is True:
+            continue
+        state = rollback_state(revision)
+        if state == ROLLBACK_UNUSABLE:
+            continue
+        tags.update(revision_tags(revision))
+        if state == ROLLBACK_USABLE:
+            break
     return tags
 
 

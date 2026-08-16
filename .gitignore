@@ -36,3 +36,4 @@ samples/
 *.swp
 *.swo.worktrees/
 .worktrees/
+.superpowers/

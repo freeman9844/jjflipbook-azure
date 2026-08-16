@@ -21,15 +21,28 @@ def version(version_id, created_at, *tags):
     }
 
 
-def revision(created_at, *images):
-    return {
-        "properties": {
-            "createdTime": created_at,
-            "template": {
-                "containers": [{"image": image} for image in images],
-            },
-        }
+def revision(
+    created_at,
+    *images,
+    active=False,
+    health_state=None,
+    running_state=None,
+    provisioning_state=None,
+):
+    properties = {
+        "active": active,
+        "createdTime": created_at,
+        "template": {
+            "containers": [{"image": image} for image in images],
+        },
     }
+    if health_state is not None:
+        properties["healthState"] = health_state
+    if running_state is not None:
+        properties["runningState"] = running_state
+    if provisioning_state is not None:
+        properties["provisioningState"] = provisioning_state
+    return {"properties": properties}
 
 
 def test_keeps_five_newest_versions():
@@ -62,14 +75,82 @@ def test_keeps_untagged_version_if_it_is_among_five_newest():
     assert MODULE.version_ids_to_delete(versions, set(), keep=5) == [1]
 
 
-def test_protected_revision_tags_uses_two_newest_revisions(monkeypatch):
+def test_protected_revision_tags_keeps_all_active_revision_tags(monkeypatch):
     monkeypatch.setattr(
         MODULE,
         "run_az",
         lambda *args: [
-            revision("2026-08-01T00:00:00Z", "ghcr.io/owner/app:sha-1"),
-            revision("2026-08-03T00:00:00Z", "ghcr.io/owner/app:sha-3"),
-            revision("2026-08-02T00:00:00Z", "ghcr.io/owner/app:sha-2"),
+            revision(
+                "2026-08-04T00:00:00Z",
+                "ghcr.io/owner/app:sha-4",
+                active=True,
+                health_state="Healthy",
+                running_state="Running",
+                provisioning_state="Provisioned",
+            ),
+            revision(
+                "2026-08-03T00:00:00Z",
+                "ghcr.io/owner/app:sha-3",
+                active=True,
+                health_state="Healthy",
+                running_state="Scale to 0",
+                provisioning_state="Provisioned",
+            ),
+            revision(
+                "2026-08-02T00:00:00Z",
+                "ghcr.io/owner/app:sha-2",
+                active=False,
+                health_state="Healthy",
+                running_state="Scale to 0",
+                provisioning_state="Provisioned",
+            ),
+        ],
+    )
+
+    assert MODULE.protected_revision_tags("rg-env", "app-name") == {
+        "sha-4",
+        "sha-3",
+        "sha-2",
+    }
+
+
+def test_protected_revision_tags_skips_newer_failed_revision_for_rollback(monkeypatch):
+    monkeypatch.setattr(
+        MODULE,
+        "run_az",
+        lambda *args: [
+            revision(
+                "2026-08-04T00:00:00Z",
+                "ghcr.io/owner/app:sha-4",
+                active=False,
+                health_state="Unhealthy",
+                running_state="Failed",
+                provisioning_state="Provisioning failed",
+            ),
+            revision(
+                "2026-08-03T00:00:00Z",
+                "ghcr.io/owner/app:sha-3",
+                active=True,
+                health_state="Healthy",
+                running_state="Running",
+                provisioning_state="Provisioned",
+            ),
+            revision(
+                "2026-08-02T00:00:00Z",
+                "ghcr.io/owner/app:sha-2",
+                active=False,
+                health_state="Healthy",
+                running_state="Scale to 0",
+                provisioning_state="Provisioned",
+            ),
+            revision(
+                "2026-08-01T00:00:00Z",
+                "ghcr.io/owner/app:sha-1",
+                active=False,
+                health_state="Healthy",
+                running_state="Scale to 0",
+                provisioning_state="Provisioned",
+            ),
         ],
     )
 
@@ -84,10 +165,18 @@ def test_protected_revision_tags_extracts_tag_from_digest_pinned_images(monkeypa
             revision(
                 "2026-08-03T00:00:00Z",
                 "ghcr.io/owner/app:sha-tag@sha256:deadbeef",
+                active=True,
+                health_state="Healthy",
+                running_state="Running",
+                provisioning_state="Provisioned",
             ),
             revision(
                 "2026-08-02T00:00:00Z",
                 "registry.example:5443/owner/app:port-tag@sha256:beadfeed",
+                active=False,
+                health_state="Healthy",
+                running_state="Scale to 0",
+                provisioning_state="Provisioned",
             ),
         ],
     )
@@ -106,12 +195,59 @@ def test_protected_revision_tags_rejects_images_without_tags(monkeypatch):
             revision(
                 "2026-08-03T00:00:00Z",
                 "ghcr.io/owner/app@sha256:deadbeef",
+                active=True,
             )
         ],
     )
 
     with pytest.raises(RuntimeError, match="no immutable tag"):
         MODULE.protected_revision_tags("rg-env", "app-name")
+
+
+def test_protected_revision_tags_protects_ambiguous_revisions_until_healthy_rollback_found(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        MODULE,
+        "run_az",
+        lambda *args: [
+            revision(
+                "2026-08-04T00:00:00Z",
+                "ghcr.io/owner/app:sha-4",
+                active=True,
+                health_state="Healthy",
+                running_state="Running",
+                provisioning_state="Provisioned",
+            ),
+            revision(
+                "2026-08-03T00:00:00Z",
+                "ghcr.io/owner/app:sha-3",
+                active=False,
+            ),
+            revision(
+                "2026-08-02T00:00:00Z",
+                "ghcr.io/owner/app:sha-2",
+                active=False,
+                health_state="Healthy",
+                running_state="Scale to 0",
+                provisioning_state="Provisioned",
+            ),
+            revision(
+                "2026-08-01T00:00:00Z",
+                "ghcr.io/owner/app:sha-1",
+                active=False,
+                health_state="Healthy",
+                running_state="Scale to 0",
+                provisioning_state="Provisioned",
+            ),
+        ],
+    )
+
+    assert MODULE.protected_revision_tags("rg-env", "app-name") == {
+        "sha-4",
+        "sha-3",
+        "sha-2",
+    }
 
 
 def test_find_app_names_rejects_zero_matches(monkeypatch):
