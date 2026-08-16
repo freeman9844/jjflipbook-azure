@@ -3,10 +3,13 @@ set -euo pipefail
 
 : "${FRONTEND_URL:?FRONTEND_URL is required}"
 : "${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
+: "${SMOKE_ATTESTATION_FILE:?SMOKE_ATTESTATION_FILE is required}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-COOKIE_JAR="$SCRIPT_DIR/.smoke_test_deployment.cookie.$$"
-LOGIN_BODY="$SCRIPT_DIR/.smoke_test_deployment.login.$$"
+ATTESTATION_DIR="$(cd -- "$(dirname -- "$SMOKE_ATTESTATION_FILE")" && pwd)"
+COOKIE_JAR="$(mktemp "$SCRIPT_DIR/.smoke_test_deployment.cookie.XXXXXX")"
+LOGIN_BODY="$(mktemp "$SCRIPT_DIR/.smoke_test_deployment.login.XXXXXX")"
+ATTESTATION_TMP=""
 BOOK_ID=""
 
 cleanup() {
@@ -18,14 +21,26 @@ cleanup() {
       echo "Warning: smoke-test flipbook cleanup failed for $BOOK_ID" >&2
     fi
   fi
-  rm -f "$COOKIE_JAR" "$LOGIN_BODY"
+  rm -f -- "$COOKIE_JAR" "$LOGIN_BODY"
+  if [[ -n "$ATTESTATION_TMP" ]]; then
+    rm -f -- "$ATTESTATION_TMP"
+  fi
 }
 trap cleanup EXIT
 
+rm -f -- "$SMOKE_ATTESTATION_FILE"
+
 curl --fail --silent --show-error --location "$FRONTEND_URL" >/dev/null
 
-jq -cn --arg password "$ADMIN_PASSWORD" \
-  '{username:"admin", password:$password}' >"$LOGIN_BODY"
+python3 - "$LOGIN_BODY" <<'PY'
+import json
+import os
+import sys
+
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump({"username": "admin", "password": os.environ["ADMIN_PASSWORD"]}, handle)
+    handle.write("\n")
+PY
 
 curl --fail --silent --show-error \
   --cookie-jar "$COOKIE_JAR" \
@@ -58,3 +73,16 @@ curl --fail --silent --show-error \
   "$FRONTEND_URL/api/backend/flipbook/$BOOK_ID" |
   jq -e '.status == "ok"' >/dev/null
 BOOK_ID=""
+
+ATTESTATION_TMP="$(mktemp "$ATTESTATION_DIR/.smoke-attestation.XXXXXX")"
+python3 - "$ATTESTATION_TMP" <<'PY'
+import json
+import os
+import sys
+
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump({"FRONTEND_URL": os.environ["FRONTEND_URL"], "completed": True}, handle)
+    handle.write("\n")
+PY
+mv -f -- "$ATTESTATION_TMP" "$SMOKE_ATTESTATION_FILE"
+ATTESTATION_TMP=""
