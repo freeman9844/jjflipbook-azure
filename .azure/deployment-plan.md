@@ -1,7 +1,7 @@
 # JJFlipBook Azure 구독 이전 배포 계획
 
-Status: Validated
-Mode: Parallel rebuild and verified cutover
+Status: Deployed
+Mode: Parallel rebuild, verified cutover, source removed
 Source: 8dd0dabf-d8c0-4651-a846-5b13e18e05eb
 Target: 43ab425a-c793-4f2e-b71a-0af7a14f26d2
 Tenant: 1716e63d-ed31-49bf-aa16-5effd27bc340
@@ -21,6 +21,37 @@ Location: koreacentral
 - `.azure/migration/data-verification.json`
 - `.azure/migration/smoke-attestation.json`
 - `.azure/migration/target-preview.txt`
+- `.azure/migration/task10-delete.log`
+- `.superpowers/sdd/2026-08-17-azure-subscription-migration/task-9-report.md`
+- `.superpowers/sdd/2026-08-17-azure-subscription-migration/task-10-report.md`
+
+## Final deployment and cleanup proof
+
+- GitHub repository deployment variables remain pinned to the approved target: `AZURE_CLIENT_ID=006ea06f-0f34-41f3-af8e-cde27fffcd78`, `AZURE_TENANT_ID=1716e63d-ed31-49bf-aa16-5effd27bc340`, `AZURE_SUBSCRIPTION_ID=43ab425a-c793-4f2e-b71a-0af7a14f26d2`, `AZURE_ENV_NAME=jjflipbook-p2`, `AZURE_LOCATION=koreacentral`.
+- Verified Preview run `32027174495` and full cutover run `32027631815` both completed successfully for workflow `Azure deployment` on commit `f99c24b0581c747a864d6b3eaac142c0f3f3b496`.
+- Target resources now serving production traffic are:
+  - Resource group / environment: `rg-jjflipbook-p2` / `jjflipbook-p2`
+  - Container Apps environment: `cae-goua5wx3gj5qg`
+  - Backend / Frontend apps: `ca-backend-goua5wx3gj5qg` / `ca-frontend-goua5wx3gj5qg`
+  - Backend UAMI: `id-backend-goua5wx3gj5qg`
+  - Storage / Cosmos / App Insights / Log Analytics: `stgoua5wx3gj5qg` / `cosmos-goua5wx3gj5qg` / `appi-goua5wx3gj5qg` / `log-goua5wx3gj5qg`
+- Live target Frontend URL: `https://ca-frontend-goua5wx3gj5qg.politesmoke-658170a7.koreacentral.azurecontainerapps.io`
+- Cutover revisions stayed at the expected immutable SHA and remained healthy after source deletion:
+  - Backend revision `ca-backend-goua5wx3gj5qg--0000001` → `ghcr.io/freeman9844/jjflipbook-azure-backend:f99c24b0581c747a864d6b3eaac142c0f3f3b496`
+  - Frontend revision `ca-frontend-goua5wx3gj5qg--0000001` → `ghcr.io/freeman9844/jjflipbook-azure-frontend:f99c24b0581c747a864d6b3eaac142c0f3f3b496`
+- Local cutover attestations:
+  - Source freeze: `.azure/migration/source-freeze.json` sha256 `3e2954171453f4f2b11c6516290ec2c45482a8a2ceec8c972f330969ea0a29c5`
+  - Smoke: `.azure/migration/smoke-attestation.json` sha256 `e62d264278b6f70158ff715168a2124090a12c8f9b5727e1057e95e263679da8`
+  - Post-smoke data: `.azure/migration/data-verification.json` sha256 `e1daf8d1f5dbde3c17f97983b3ee27e4761005804cd5075c9a6c812f2d57634c`
+- Blob proof from the final attestation: `91` blobs, `188996921` bytes, manifest sha256 `53deb66ebc76862e0a6beda4a78077f50395e191b6c11cfc6028f0a629b519f2`.
+- Cosmos proof from the final attestation: `users=1` (sha256 `9e615e80a379f1ab03082787de1fbe3d34909e13b7291086066503f8dbabc5db`), `folders=1` (sha256 `797951d3a3bf2c0783fa28c7201bd339875d5b7d117470f48ae04ba44d4dda74`), `flipbooks=2` (sha256 `fc37af71a0e1be80b8846bb72e3883de63d1a9edf165c4964833f7b64a01ee0a`), and `source_url_references_remaining=0`.
+- Source deletion was executed only after the proof gates passed by running `scripts/delete_source_environment.sh` with explicit `TARGET_COSMOS_ACCOUNT=cosmos-goua5wx3gj5qg`, `TARGET_COSMOS_ROLE_ASSIGNMENT_ID=c599b13a-108d-5125-8127-e99a7958f31b`, and confirmation token `delete:8dd0dabf-d8c0-4651-a846-5b13e18e05eb:rg-jjflipbook-p2`; the script log spans `2026-08-17T21:45:47+09:00` to `2026-08-17T22:10:00+09:00`.
+- Post-delete checks proved:
+  - `az group exists --subscription 8dd0dabf-d8c0-4651-a846-5b13e18e05eb --name rg-jjflipbook-p2` → `false`
+  - Source OIDC subscription-scope roles for service principal `069bad89-0fee-4193-a435-02b6c988b9d2` were removed (`Contributor` and `Role Based Access Control Administrator` count `0`)
+  - Temporary operator roles were removed exactly as intended: target Storage role assignment `17f5589f-39a4-5afb-9128-5b6de1415331` absent and target Cosmos SQL role assignment `c599b13a-108d-5125-8127-e99a7958f31b` absent
+  - Target backend runtime access remained exact: one `Storage Blob Data Contributor` Azure RBAC assignment on `stgoua5wx3gj5qg` plus one Cosmos DB Built-in Data Contributor SQL role assignment for backend principal `69310c48-6a2b-43e8-8116-0cd84eb396f1`
+  - Target Frontend `/` and `/api/backend/healthz` both continued returning HTTP `200`
 
 ## Validation Checklist
 
@@ -122,4 +153,4 @@ Validation timestamp: `2026-08-17T19:28:45+09:00`
 
 ### Overall result
 
-Validation is complete and this plan is now `Status: Validated`. The only remaining follow-up is to merge the separate GHCR cleanup child-manifest retention fix before any workflow path that performs cleanup; this does not block the initial target `azd provision` or the current Task 7 validation gate because the repaired immutable images are already pullable and Task 7 does not run GHCR cleanup.
+Validation, cutover, and proof-gated source cleanup are complete and this plan is now `Status: Deployed`. The new subscription `43ab425a-c793-4f2e-b71a-0af7a14f26d2` is serving traffic at `https://ca-frontend-goua5wx3gj5qg.politesmoke-658170a7.koreacentral.azurecontainerapps.io`, the source resource group `rg-jjflipbook-p2` in subscription `8dd0dabf-d8c0-4651-a846-5b13e18e05eb` has been deleted after all gates passed, source OIDC subscription roles were revoked, and the temporary target operator Storage/Cosmos assignments were removed while backend runtime data access stayed intact.

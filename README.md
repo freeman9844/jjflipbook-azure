@@ -277,11 +277,14 @@ az containerapp list \
 - Tenant / 환경 / 리소스 그룹: `1716e63d-ed31-49bf-aa16-5effd27bc340` / `jjflipbook-p2` / `rg-jjflipbook-p2`
 - 대상 리전: `koreacentral`
 - URL 동작: 커스텀 도메인이 없으므로 검증된 cutover 후 운영 URL은 대상 Frontend Container App의 새 `https://<fqdn>`입니다. 원본 URL 유지/재사용은 범위 밖이며, 원본 URL은 삭제 승인 전 rollback 확인용으로만 남깁니다.
+- 현재 검증된 운영 URL: `https://ca-frontend-goua5wx3gj5qg.politesmoke-658170a7.koreacentral.azurecontainerapps.io`
 
 ```bash
 # GitHub 저장소 변수가 승인된 대상 구독을 가리키는지 확인
-gh variable get AZURE_SUBSCRIPTION_ID --repo freeman9844/jjflipbook-azure
-gh variable list | grep -E 'AZURE_(TENANT_ID|ENV_NAME|LOCATION)'
+gh variable list --repo freeman9844/jjflipbook-azure \
+  | awk '$1 == "AZURE_SUBSCRIPTION_ID" { print $2 }'
+gh variable list --repo freeman9844/jjflipbook-azure \
+  | grep -E '^AZURE_(TENANT_ID|ENV_NAME|LOCATION)[[:space:]]'
 
 # 실제 Azure 변경 없이 대상 구독 Preview 실행
 gh workflow run azure-dev.yml \
