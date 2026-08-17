@@ -50,6 +50,15 @@ require_regular_file "Source freeze state file" "$SOURCE_FREEZE_STATE_FILE"
 
 if ! jq -e \
   --arg source_subscription "$SOURCE_SUBSCRIPTION_ID" \
+  --arg source_rg "$SOURCE_RESOURCE_GROUP" \
+  '.subscription_id == $source_subscription and
+   .resource_group == $source_rg' \
+  "$SOURCE_FREEZE_STATE_FILE" >/dev/null; then
+  refuse "Source freeze state file must match SOURCE_SUBSCRIPTION_ID and SOURCE_RESOURCE_GROUP."
+fi
+
+if ! jq -e \
+  --arg source_subscription "$SOURCE_SUBSCRIPTION_ID" \
   --arg target_subscription "$TARGET_SUBSCRIPTION_ID" \
   --arg source_rg "$SOURCE_RESOURCE_GROUP" \
   --arg target_rg "$TARGET_RESOURCE_GROUP" \

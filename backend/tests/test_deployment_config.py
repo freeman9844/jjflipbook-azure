@@ -206,6 +206,10 @@ def _default_az_scenario():
             "migration_principal_object_id": MIGRATION_PRINCIPAL_OBJECT_ID,
             "azure_client_id": AZURE_CLIENT_ID,
         },
+        "freeze_state_verification": {
+            "subscription_id": APPROVED_SOURCE_SUBSCRIPTION_ID,
+            "resource_group": APPROVED_RESOURCE_GROUP,
+        },
         "target_apps": [
             _target_app("ca-backend-target", "backend"),
             _target_app("ca-frontend-target", "frontend"),
@@ -268,6 +272,13 @@ LOG_PATH = Path(os.environ["FAKE_AZ_LOG"])
 STATE_DIR = Path(os.environ["FAKE_AZ_STATE_DIR"])
 SCENARIO = json.loads(Path(os.environ["FAKE_AZ_SCENARIO"]).read_text(encoding="utf-8"))
 EXPECTED = SCENARIO["expected"]
+FREEZE_STATE_VERIFICATION = SCENARIO.get("freeze_state_verification", {})
+SOURCE_VERIFICATION_SUBSCRIPTION_ID = FREEZE_STATE_VERIFICATION.get(
+    "subscription_id", EXPECTED["source_subscription_id"]
+)
+SOURCE_VERIFICATION_RESOURCE_GROUP = FREEZE_STATE_VERIFICATION.get(
+    "resource_group", EXPECTED["source_resource_group"]
+)
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -314,8 +325,8 @@ if ARGS[:2] == ["containerapp", "list"]:
         print_json(SCENARIO["target_apps"])
         raise SystemExit(0)
     if (
-        subscription == EXPECTED["source_subscription_id"]
-        and resource_group == EXPECTED["source_resource_group"]
+        subscription == SOURCE_VERIFICATION_SUBSCRIPTION_ID
+        and resource_group == SOURCE_VERIFICATION_RESOURCE_GROUP
     ):
         marker("verify source frozen")
         print_json(SCENARIO["source_apps"])
@@ -339,8 +350,8 @@ if ARGS[:3] == ["containerapp", "revision", "list"]:
         print_json(SCENARIO["target_revisions"][app_name])
         raise SystemExit(0)
     if (
-        subscription == EXPECTED["source_subscription_id"]
-        and resource_group == EXPECTED["source_resource_group"]
+        subscription == SOURCE_VERIFICATION_SUBSCRIPTION_ID
+        and resource_group == SOURCE_VERIFICATION_RESOURCE_GROUP
     ):
         print_json(SCENARIO["source_revisions"][app_name])
         raise SystemExit(0)
@@ -1541,6 +1552,49 @@ def test_delete_source_environment_rejects_source_not_marked_frozen(tmp_path):
 
     assert result.returncode != 0
     assert "State file is not marked frozen." in result.stderr
+    assert "group delete" not in _log_text(az_log)
+
+
+@pytest.mark.parametrize(
+    ("freeze_state_overrides", "az_scenario_overrides"),
+    [
+        (
+            {
+                "subscription_id": "22222222-2222-2222-2222-222222222222",
+            },
+            {
+                "freeze_state_verification": {
+                    "subscription_id": "22222222-2222-2222-2222-222222222222",
+                }
+            },
+        ),
+        (
+            {
+                "resource_group": "rg-jjflipbook-other",
+            },
+            {
+                "freeze_state_verification": {
+                    "resource_group": "rg-jjflipbook-other",
+                }
+            },
+        ),
+    ],
+)
+def test_delete_source_environment_rejects_mismatched_freeze_state_scope(
+    tmp_path, freeze_state_overrides, az_scenario_overrides
+):
+    result, az_log, _ = _run_delete_source_environment(
+        tmp_path,
+        freeze_state_overrides=freeze_state_overrides,
+        az_scenario_overrides=az_scenario_overrides,
+    )
+
+    assert result.returncode != 0
+    assert (
+        "Source freeze state file must match SOURCE_SUBSCRIPTION_ID "
+        "and SOURCE_RESOURCE_GROUP."
+    ) in result.stderr
+    assert "verify source frozen" not in _log_text(az_log)
     assert "group delete" not in _log_text(az_log)
 
 
