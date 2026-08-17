@@ -175,12 +175,15 @@ def rewrite_flipbook_blob_urls(
 
 
 def canonical_document(document: dict) -> bytes:
-    clean = {
+    return _json_bytes(_strip_cosmos_system_fields(document))
+
+
+def _strip_cosmos_system_fields(document: dict) -> dict:
+    return {
         key: value
         for key, value in document.items()
         if key not in SYSTEM_FIELDS
     }
-    return _json_bytes(clean)
 
 
 def build_cosmos_manifest(
@@ -285,6 +288,7 @@ def copy_cosmos_container(
             if container_name == "flipbooks"
             else dict(document)
         )
+        transformed = _strip_cosmos_system_fields(transformed)
         source_keys.add(
             (
                 transformed.get(partition_key_field, transformed.get("id")),

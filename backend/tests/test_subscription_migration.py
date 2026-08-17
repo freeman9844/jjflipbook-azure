@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "subscription_migration.py"
 SPEC = importlib.util.spec_from_file_location("subscription_migration", SCRIPT)
@@ -202,10 +204,27 @@ def test_copy_cosmos_container_upserts_transformed_docs_and_deletes_extras():
                     "https://stsource.blob.core.windows.net/"
                     "flipbook-assets/flipbooks/book-1/page_1.webp"
                 ],
+                "_rid": "rid",
+                "_self": "self",
+                "_etag": "etag",
+                "_attachments": "attachments/",
+                "_ts": 123,
             }
         ]
     )
-    target = FakeContainer([{"id": "old-book", "image_urls": []}])
+    target = FakeContainer(
+        [
+            {
+                "id": "old-book",
+                "image_urls": [],
+                "_rid": "old-rid",
+                "_self": "old-self",
+                "_etag": "old-etag",
+                "_attachments": "old-attachments/",
+                "_ts": 456,
+            }
+        ]
+    )
 
     result = MODULE.copy_cosmos_container(
         container_name="flipbooks",
@@ -224,7 +243,37 @@ def test_copy_cosmos_container_upserts_transformed_docs_and_deletes_extras():
     assert target.upserted[0]["image_urls"][0].startswith(
         "https://sttarget.blob.core.windows.net/"
     )
+    assert not any(field in target.upserted[0] for field in MODULE.SYSTEM_FIELDS)
     assert target.deleted == [("old-book", "old-book")]
+
+
+def test_copy_cosmos_container_strips_system_fields_for_non_flipbook_container():
+    source = FakeContainer(
+        [
+            {
+                "id": "user-1",
+                "name": "Ada",
+                "_rid": "rid",
+                "_self": "self",
+                "_etag": "etag",
+                "_attachments": "attachments/",
+                "_ts": 123,
+            }
+        ]
+    )
+    target = FakeContainer([])
+
+    result = MODULE.copy_cosmos_container(
+        container_name="users",
+        source_container=source,
+        target_container=target,
+        source_blob_base="https://stsource.blob.core.windows.net/flipbook-assets",
+        target_blob_base="https://sttarget.blob.core.windows.net/flipbook-assets",
+        delete_target_extras=False,
+    )
+
+    assert result == {"upserted": 1, "deleted": 0}
+    assert target.upserted[0] == {"id": "user-1", "name": "Ada"}
 
 
 def test_blob_manifest_cli_writes_output_file(monkeypatch, tmp_path):
@@ -374,3 +423,83 @@ def test_verify_cli_writes_success_attestation(monkeypatch, tmp_path):
     assert data["cosmos"]["matched"] is True
     assert data["cosmos"]["source_url_references_remaining"] == 0
     assert "flipbooks" in data["cosmos"]["containers"]
+
+
+def test_verify_cli_exits_nonzero_and_writes_failure_attestation(monkeypatch, tmp_path):
+    source_cosmos_endpoint = "https://source.documents.azure.com:443/"
+    target_cosmos_endpoint = "https://target.documents.azure.com:443/"
+    source_storage_url = "https://stsource.blob.core.windows.net"
+    target_storage_url = "https://sttarget.blob.core.windows.net"
+    output = tmp_path / "verification.json"
+
+    source_flipbooks = FakeContainer([])
+    target_flipbooks = FakeContainer([])
+
+    source_database = FakeDatabaseClient({"flipbooks": source_flipbooks})
+    target_database = FakeDatabaseClient({"flipbooks": target_flipbooks})
+
+    source_blob_container = FakeBlobContainer(
+        [blob("flipbooks/book-1/page_1.webp", 11, b"\x10\x11")]
+    )
+    target_blob_container = FakeBlobContainer([])
+
+    FAKE_COSMOS_DATABASES.clear()
+    FAKE_COSMOS_DATABASES[source_cosmos_endpoint] = {"jjflipbook": source_database}
+    FAKE_COSMOS_DATABASES[target_cosmos_endpoint] = {"jjflipbook": target_database}
+    FAKE_BLOB_CONTAINERS.clear()
+    FAKE_BLOB_CONTAINERS[source_storage_url] = {
+        "flipbook-assets": source_blob_container,
+    }
+    FAKE_BLOB_CONTAINERS[target_storage_url] = {
+        "flipbook-assets": target_blob_container,
+    }
+
+    class FakeAzureCliCredential:
+        def __init__(self, tenant_id=None):
+            self.tenant_id = tenant_id
+
+    monkeypatch.setattr(MODULE, "AzureCliCredential", FakeAzureCliCredential)
+    monkeypatch.setattr(MODULE, "CosmosClient", FakeCosmosClient)
+    monkeypatch.setattr(MODULE, "BlobServiceClient", FakeBlobServiceClient)
+    monkeypatch.setattr(
+        MODULE.sys,
+        "argv",
+        [
+            "subscription_migration.py",
+            "verify",
+            "--tenant-id",
+            "tenant-1",
+            "--source-subscription-id",
+            "source-sub",
+            "--target-subscription-id",
+            "target-sub",
+            "--source-resource-group",
+            "rg-source",
+            "--target-resource-group",
+            "rg-target",
+            "--source-cosmos-endpoint",
+            source_cosmos_endpoint,
+            "--target-cosmos-endpoint",
+            target_cosmos_endpoint,
+            "--source-storage-account",
+            "stsource",
+            "--target-storage-account",
+            "sttarget",
+            "--blob-container-name",
+            "flipbook-assets",
+            "--database-name",
+            "jjflipbook",
+            "--output",
+            str(output),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        MODULE.main()
+
+    assert excinfo.value.code == 1
+    data = json.loads(output.read_text())
+    assert data["schema_version"] == 1
+    assert data["completed"] is False
+    assert data["blob"]["matched"] is False
+    assert data["cosmos"]["matched"] is True
