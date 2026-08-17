@@ -1,6 +1,6 @@
 # JJFlipBook Azure 구독 이전 배포 계획
 
-Status: Validated
+Status: Deployed
 Current change: Keep frontend and backend replicas warm for 24-hour login responsiveness
 Mode: Parallel rebuild, verified cutover, source removed
 Source: 8dd0dabf-d8c0-4651-a846-5b13e18e05eb
@@ -53,6 +53,22 @@ Location: koreacentral
 - Static role review remains least-privilege: backend UAMI has Storage Blob Data Contributor scoped to the Storage account and Cosmos DB Built-in Data Contributor scoped to the Cosmos account; frontend has no managed identity or data-plane role.
 - Azure Policy review found the default Security Center audit initiative and the inherited West Europe restriction. Neither blocks the existing `koreacentral` resources or this scale-only change.
 - `git diff --check` passed.
+
+### Current deployment proof
+
+- Deployment commit: `8ad04f80b1dc609e912ed90a116ce0cffbcad86d`.
+- GitHub Actions run `32040948291` completed successfully, including image publication, what-if, provisioning, revision convergence, end-to-end smoke testing, legacy cleanup, and GHCR cleanup.
+- Live backend scale: `minReplicas: 1`, `maxReplicas: 2`, `cooldownPeriod: 60`, `pollingInterval: 30`, sole rule `http-single`.
+- Live frontend scale: `minReplicas: 1`, `maxReplicas: 2`, `cooldownPeriod: 300`, `pollingInterval: 30`, sole rule `http`.
+- `daily-warm-window` is absent from both Container Apps.
+- Active backend revision `ca-backend-goua5wx3gj5qg--0000003` and frontend revision `ca-frontend-goua5wx3gj5qg--0000004` are `Healthy`, `Provisioned`, and receive `100%` traffic using images tagged with deployment SHA `8ad04f80b1dc609e912ed90a116ce0cffbcad86d`.
+- Frontend `/` and proxied backend `/api/backend/healthz` both return HTTP `200`.
+- Cosmos `enableAutomaticFailover` remains `true`.
+- Live backend roles remain exact: `Storage Blob Data Contributor` at the Storage account and Cosmos DB Built-in Data Contributor at the Cosmos account.
+- Endpoints:
+  - Frontend: `https://ca-frontend-goua5wx3gj5qg.politesmoke-658170a7.koreacentral.azurecontainerapps.io/`
+  - Internal backend: `https://ca-backend-goua5wx3gj5qg.internal.politesmoke-658170a7.koreacentral.azurecontainerapps.io/`
+  - Azure Portal: `https://portal.azure.com/#@/resource/subscriptions/43ab425a-c793-4f2e-b71a-0af7a14f26d2/resourceGroups/rg-jjflipbook-p2/overview`
 
 ## References
 
