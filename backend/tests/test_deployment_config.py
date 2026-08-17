@@ -195,7 +195,15 @@ def _run_blob_sync(
 def test_blob_sync_uses_azure_cli_identity_and_final_exact_mirror(tmp_path):
     initial = _run_blob_sync(tmp_path, "initial")
     final = _run_blob_sync(tmp_path, "final")
+    expected_source = (
+        "https://sourceaccount.blob.core.windows.net/flipbooks"
+    )
+    expected_target = (
+        "https://targetaccount.blob.core.windows.net/flipbooks"
+    )
 
+    assert f"argv: [sync] [{expected_source}] [{expected_target}]" in initial
+    assert f"argv: [sync] [{expected_source}] [{expected_target}]" in final
     assert "--from-to=BlobBlob" in initial
     assert "--recursive=true" in initial
     assert "--delete-destination=false" in initial
