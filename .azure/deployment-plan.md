@@ -6,6 +6,7 @@ Source: 8dd0dabf-d8c0-4651-a846-5b13e18e05eb
 Target: 43ab425a-c793-4f2e-b71a-0af7a14f26d2
 Tenant: 1716e63d-ed31-49bf-aa16-5effd27bc340
 Environment/RG: jjflipbook-p2 / rg-jjflipbook-p2
+Location: koreacentral
 
 ## References
 

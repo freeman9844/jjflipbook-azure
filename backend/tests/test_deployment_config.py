@@ -1225,6 +1225,21 @@ def test_workflow_serializes_each_azure_environment():
     assert "cancel-in-progress: false" in workflow
 
 
+def test_migration_runbook_pins_target_region():
+    deployment_plan = (ROOT / ".azure" / "deployment-plan.md").read_text(
+        encoding="utf-8"
+    )
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "Location: koreacentral" in deployment_plan
+    assert "- 대상 리전: `koreacentral`" in readme
+    assert (
+        "gh variable list | awk '$1 == \"AZURE_LOCATION\" { print $2 }' "
+        "| grep -Fx 'koreacentral'"
+        in readme
+    )
+
+
 def test_workflow_uses_separate_buildkit_cache_scopes():
     workflow = _load_workflow()
     backend_step = _workflow_step(workflow, "Build and push backend image")
