@@ -314,6 +314,27 @@ def test_workflow_builds_ghcr_and_previews_before_provisioning():
     )
 
 
+def test_workflow_supports_preview_only_manual_runs():
+    workflow = _load_workflow()
+
+    assert "validate_only:" in workflow
+    assert "type: boolean" in workflow
+    assert "default: false" in workflow
+
+    deploy_condition = (
+        "if: ${{ github.event_name != 'workflow_dispatch' "
+        "|| inputs.validate_only != true }}"
+    )
+    for step_name in (
+        "Provision optimized infrastructure",
+        "Resolve frontend URL",
+        "Smoke test deployment",
+        "Clean up legacy Azure resources",
+        "Clean up GHCR versions",
+    ):
+        assert deploy_condition in _workflow_step(workflow, step_name)
+
+
 def test_workflow_uses_separate_buildkit_cache_scopes():
     workflow = _load_workflow()
     backend_step = _workflow_step(workflow, "Build and push backend image")

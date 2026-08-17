@@ -1,6 +1,12 @@
 # Run when commits are pushed to main
 on:
   workflow_dispatch:
+    inputs:
+      validate_only:
+        description: Preview infrastructure changes without provisioning
+        required: false
+        type: boolean
+        default: false
   push:
     # Run when commits are pushed to mainline branch (main or master)
     # Set this to the mainline branch you are using
@@ -87,12 +93,14 @@ jobs:
           INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
       - name: Provision optimized infrastructure
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
         run: azd provision --no-prompt
         env:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
       - name: Resolve frontend URL
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
         run: |
           mapfile -t frontend_fqdns < <(
             az containerapp list --resource-group "rg-$AZURE_ENV_NAME" --output json |
@@ -104,17 +112,20 @@ jobs:
           fi
           echo "FRONTEND_URL=https://${frontend_fqdns[0]}" >> "$GITHUB_ENV"
       - name: Smoke test deployment
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
         run: |
           FRONTEND_URL="$FRONTEND_URL" \
           SMOKE_ATTESTATION_FILE="$SMOKE_ATTESTATION_FILE" \
           ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}" \
           bash scripts/smoke_test_deployment.sh
       - name: Clean up legacy Azure resources
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
         run: |
           FRONTEND_URL="$FRONTEND_URL" \
           SMOKE_ATTESTATION_FILE="$SMOKE_ATTESTATION_FILE" \
           bash scripts/cleanup_legacy_azure_resources.sh
       - name: Clean up GHCR versions
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
         run: python3 scripts/cleanup_ghcr_versions.py
         env:
           AZURE_ENV_NAME: ${{ env.AZURE_ENV_NAME }}
