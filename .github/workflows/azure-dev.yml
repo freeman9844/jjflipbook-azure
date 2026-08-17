@@ -1,3 +1,5 @@
+name: Azure deployment
+
 # main 브랜치 변경 시 자동 배포하고, 필요하면 Actions 화면에서 수동 실행한다.
 on:
   workflow_dispatch:
@@ -21,6 +23,11 @@ permissions:
   id-token: write
   packages: write
 
+# 자동 push와 수동 배포가 resources ARM deployment에서 서로 충돌하지 않도록
+# 같은 구독/환경 조합의 실행은 취소하지 않고 순서대로 대기시킨다.
+concurrency:
+  group: azure-${{ vars.AZURE_SUBSCRIPTION_ID }}-${{ vars.AZURE_ENV_NAME }}
+  cancel-in-progress: false
 
 jobs:
   build:

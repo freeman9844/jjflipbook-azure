@@ -1213,6 +1213,18 @@ def test_workflow_supports_preview_only_manual_runs():
         assert deploy_condition in _workflow_step(workflow, step_name)
 
 
+def test_workflow_serializes_each_azure_environment():
+    workflow = _load_workflow()
+
+    assert workflow.startswith("name: Azure deployment\n")
+    assert "concurrency:" in workflow
+    assert (
+        "group: azure-${{ vars.AZURE_SUBSCRIPTION_ID }}-"
+        "${{ vars.AZURE_ENV_NAME }}" in workflow
+    )
+    assert "cancel-in-progress: false" in workflow
+
+
 def test_workflow_uses_separate_buildkit_cache_scopes():
     workflow = _load_workflow()
     backend_step = _workflow_step(workflow, "Build and push backend image")

@@ -37,3 +37,6 @@ samples/
 *.swo.worktrees/
 .worktrees/
 .superpowers/
+
+# Local Azure subscription migration evidence
+.azure/migration/
