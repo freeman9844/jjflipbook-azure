@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 
 from database import get_container
 from models import User
-from utils import hash_password, required_setting, validate_runtime_config
+from utils import hash_password, required_setting, validate_runtime_config, verify_password
 
 from routers import auth, flipbooks, folders, music
 
@@ -39,10 +39,10 @@ async def _seed_admin():
     from azure.cosmos.exceptions import CosmosResourceNotFoundError
     try:
         users = get_container("users")
+        admin_password = required_setting("ADMIN_PASSWORD", "admin")
         try:
-            users.read_item(item="admin", partition_key="admin")
+            admin_user = users.read_item(item="admin", partition_key="admin")
         except CosmosResourceNotFoundError:
-            admin_password = required_setting("ADMIN_PASSWORD", "admin")
             admin_user = User(
                 id="admin",
                 username="admin",
@@ -50,6 +50,18 @@ async def _seed_admin():
             )
             users.create_item(admin_user.model_dump(mode="json"))
             logger.info("✅ [Lifespan] Default admin user seeded successfully.")
+        else:
+            password_hash = admin_user.get("password_hash")
+            password_matches = False
+            if isinstance(password_hash, str):
+                try:
+                    password_matches = verify_password(admin_password, password_hash)
+                except ValueError:
+                    pass
+            if not password_matches:
+                admin_user["password_hash"] = hash_password(admin_password)
+                users.replace_item(item="admin", body=admin_user)
+                logger.info("✅ [Lifespan] Admin password synchronized.")
     except Exception as e:
         logger.warning(f"⚠️ [Lifespan] Admin seeding failed (non-critical): {e}")
 

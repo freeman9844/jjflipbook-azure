@@ -1,14 +1,16 @@
+import asyncio
 import os
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
-from utils import hash_password
+from utils import hash_password, verify_password
 from services.errors import (
     AssetDeletionError,
     PdfProcessingError,
     PDF_PROCESSING_FAILED_MESSAGE,
 )
 
+import main
 from main import app
 client = TestClient(app)
 
@@ -34,6 +36,23 @@ def _fake_users_container(password: str):
         "password_hash": hash_password(password),
     }
     return container
+
+
+def test_admin_seed_synchronizes_existing_password_with_runtime_secret():
+    container = _fake_users_container("old-password")
+
+    with (
+        patch.object(main, "get_container", return_value=container),
+        patch.dict(
+            os.environ,
+            {"APP_ENV": "production", "ADMIN_PASSWORD": "new-secure-password"},
+        ),
+    ):
+        asyncio.run(main._seed_admin())
+
+    container.replace_item.assert_called_once()
+    replacement = container.replace_item.call_args.kwargs["body"]
+    assert verify_password("new-secure-password", replacement["password_hash"])
 
 
 @patch("routers.auth.get_container")
