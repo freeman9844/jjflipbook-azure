@@ -165,6 +165,7 @@ cd frontend && npx jest
 - **병렬 Blob 업로드**: `ThreadPoolExecutor`(5 workers)로 페이지 이미지 동시 업로드
 - **자원 회수 보장**: 성공/실패와 무관하게 `finally`에서 임시 디렉토리 강제 소거
 - **변환 품질 파라미터화**: `PDF_DPI`(기본 150), `WEBP_QUALITY`(기본 75) 환경변수로 조정 가능
+- **표지 사전 생성**: 첫 페이지에서 384px·640px WebP 표지를 생성해 브라우저가 `srcset`으로 선택 — 런타임 이미지 재변환과 Sharp 의존성 제거
 
 ### Cold Start 및 리소스 구성 최적화
 - **Lazy Azure 클라이언트**: `database.py`의 Cosmos/Blob 클라이언트는 첫 호출 시점에 초기화 — 모듈 임포트 시 인증 비용 없음

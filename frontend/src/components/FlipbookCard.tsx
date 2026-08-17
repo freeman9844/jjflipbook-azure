@@ -1,7 +1,6 @@
 "use client";
 
 import React from 'react';
-import Image from 'next/image';
 
 export interface Flipbook {
     id: string;
@@ -9,6 +8,7 @@ export interface Flipbook {
     title: string;
     page_count: number;
     image_urls?: string[];
+    cover_urls?: string[];
     status?: string;
     folder_id?: string | null;
     created_at: string;
@@ -22,7 +22,11 @@ interface FlipbookCardProps {
 }
 
 export default function FlipbookCard({ book, isMobile, onDelete, onOpen }: FlipbookCardProps) {
-    const coverUrl = book.image_urls && book.image_urls.length > 0 ? book.image_urls[0] : null;
+    const responsiveCovers = book.cover_urls || [];
+    const coverUrl = responsiveCovers.at(-1) || book.image_urls?.[0] || null;
+    const coverSrcSet = responsiveCovers.length >= 2
+        ? `${responsiveCovers[0]} 384w, ${responsiveCovers[1]} 640w`
+        : undefined;
     const isFailed = book.status === 'failed';
     const isProcessing = book.page_count === 0 && !isFailed;
 
@@ -77,12 +81,15 @@ export default function FlipbookCard({ book, isMobile, onDelete, onOpen }: Flipb
 
             <div style={coverStyle}>
                 {coverUrl ? (
-                    <Image
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
                         src={coverUrl}
+                        srcSet={coverSrcSet}
+                        sizes="(min-width: 768px) and (max-width: 771px) 430px, 260px"
                         alt={book.title}
-                        fill
-                        style={{ objectFit: 'cover' }}
-                        sizes="(max-width: 768px) 100vw, 33vw"
+                        loading="lazy"
+                        decoding="async"
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                     />
                 ) : (
                     <span style={{ fontSize: '32px' }}>📖</span>

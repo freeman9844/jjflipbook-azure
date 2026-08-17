@@ -146,19 +146,27 @@ def test_list_flipbooks_redacts_error_message(mock_get_container):
 
     assert response.status_code == 200
     data = response.json()
-    assert data == [{"id": "book-1", "status": "failed", "image_urls": []}]
+    assert data == [
+        {
+            "id": "book-1",
+            "status": "failed",
+            "image_urls": [],
+            "cover_urls": [],
+        }
+    ]
     assert "raw exception text with token secret-123" not in response.text
 
 
 @patch("routers.flipbooks.sign_url", side_effect=lambda value: f"{value}?signed")
 @patch("routers.flipbooks.get_container")
-def test_list_flipbooks_returns_only_signed_cover(mock_get_container, _sign_url):
+def test_list_flipbooks_returns_signed_responsive_covers(mock_get_container, _sign_url):
     container = MagicMock()
     container.query_items.return_value = [
         {
             "id": "book-1",
             "uuid_key": "book-1",
             "title": "Book",
+            "cover_urls": ["cover-384.webp", "cover-640.webp"],
             "image_urls": ["page-1.webp", "page-2.webp", "page-3.webp"],
         }
     ]
@@ -167,10 +175,39 @@ def test_list_flipbooks_returns_only_signed_cover(mock_get_container, _sign_url)
     response = client.get("/flipbooks")
 
     assert response.status_code == 200
+    assert response.json()[0]["cover_urls"] == [
+        "cover-384.webp?signed",
+        "cover-640.webp?signed",
+    ]
     assert response.json()[0]["image_urls"] == ["page-1.webp?signed"]
     query = container.query_items.call_args.kwargs["query"]
+    assert "c.cover_urls" in query
     assert "ARRAY_SLICE(c.image_urls, 0, 1)" in query
     assert "SELECT *" not in query
+
+
+@patch("routers.flipbooks.sign_url", side_effect=lambda value: f"{value}?signed")
+@patch("routers.flipbooks.get_container")
+def test_list_flipbooks_keeps_first_page_fallback_for_existing_books(
+    mock_get_container,
+    _sign_url,
+):
+    container = MagicMock()
+    container.query_items.return_value = [
+        {
+            "id": "legacy-book",
+            "uuid_key": "legacy-book",
+            "title": "Legacy",
+            "image_urls": ["page-1.webp"],
+        }
+    ]
+    mock_get_container.return_value = container
+
+    response = client.get("/flipbooks")
+
+    assert response.status_code == 200
+    assert response.json()[0]["cover_urls"] == []
+    assert response.json()[0]["image_urls"] == ["page-1.webp?signed"]
 
 
 @patch("routers.flipbooks.sign_url", side_effect=lambda value: f"{value}?signed")
@@ -180,6 +217,7 @@ def test_get_flipbook_keeps_complete_page_manifest(mock_get_container, _sign_url
     container.read_item.return_value = {
         "id": "book-2",
         "image_urls": ["page-1.webp", "page-2.webp"],
+        "cover_urls": ["cover-384.webp", "cover-640.webp"],
     }
     mock_get_container.return_value = container
 
@@ -189,6 +227,10 @@ def test_get_flipbook_keeps_complete_page_manifest(mock_get_container, _sign_url
     assert response.json()["image_urls"] == [
         "page-1.webp?signed",
         "page-2.webp?signed",
+    ]
+    assert response.json()["cover_urls"] == [
+        "cover-384.webp?signed",
+        "cover-640.webp?signed",
     ]
 
 

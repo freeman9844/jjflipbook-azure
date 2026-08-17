@@ -67,8 +67,12 @@ def process_pdf_task(pdf_path: str, book_storage: str, uuid_key: str, date_str: 
     """백그라운드에서 PDF를 이미지로 변환하고 Blob Storage에 업로드 후 Cosmos 업데이트."""
     try:
         # pdf_utils는 실제 변환 시점에만 임포트 (cold start 임포트 오버헤드 제거)
-        from pdf_utils import convert_pdf_to_images
+        from pdf_utils import convert_pdf_to_images, create_cover_thumbnails
         filenames = convert_pdf_to_images(pdf_path, book_storage, split_pages=split_pages)
+        cover_filenames = create_cover_thumbnails(
+            os.path.join(book_storage, filenames[0]),
+            book_storage,
+        )
 
         container = get_blob_container()
 
@@ -82,8 +86,12 @@ def process_pdf_task(pdf_path: str, book_storage: str, uuid_key: str, date_str: 
                 )
             return f"{BLOB_BASE_URL}/{blob_name}"
 
+        upload_filenames = filenames + cover_filenames
         with ThreadPoolExecutor(max_workers=5) as executor:
-            uploaded_urls = list(executor.map(upload_worker, filenames))
+            uploaded_assets = list(executor.map(upload_worker, upload_filenames))
+
+        uploaded_urls = uploaded_assets[:len(filenames)]
+        cover_urls = uploaded_assets[len(filenames):]
 
         pdf_blob_name = f"flipbooks/{date_str}/{uuid_key}/original.pdf" if date_str else f"flipbooks/{uuid_key}/original.pdf"
         with open(pdf_path, "rb") as f:
@@ -99,6 +107,7 @@ def process_pdf_task(pdf_path: str, book_storage: str, uuid_key: str, date_str: 
             patch_operations=[
                 {"op": "set", "path": "/page_count", "value": len(filenames)},
                 {"op": "set", "path": "/image_urls", "value": uploaded_urls},
+                {"op": "set", "path": "/cover_urls", "value": cover_urls},
                 {"op": "set", "path": "/pdf_url", "value": pdf_url},
                 {"op": "set", "path": "/status", "value": "success"},
             ],

@@ -25,8 +25,8 @@ class Flipbook(BaseModel):
     user_id: str = "admin"
     page_count: int = 0
     created_at: datetime = Field(default_factory=utc_now)
-    # Cosmos DB는 리스트(배열)를 직접 지원하므로 변경
-    image_urls: List[str] = [] 
+    image_urls: List[str] = Field(default_factory=list)
+    cover_urls: List[str] = Field(default_factory=list)
     pdf_url: Optional[str] = None
 
 class Overlay(BaseModel):

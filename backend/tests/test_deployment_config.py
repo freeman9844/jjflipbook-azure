@@ -149,12 +149,15 @@ def test_backend_base_image_and_runtime_dependencies_are_pinned():
     assert "httpx==0.28.1" in development_requirements
 
 
-def test_frontend_prunes_only_incompatible_sharp_runtime_packages():
+def test_frontend_runtime_removes_sharp_after_disabling_image_optimization():
     dockerfile = (ROOT / "frontend" / "Dockerfile").read_text()
-    assert ".next/standalone/node_modules/@img/sharp-linux-x64" in dockerfile
-    assert ".next/standalone/node_modules/@img/sharp-libvips-linux-x64" in dockerfile
-    assert "sharp-linuxmusl-x64" not in dockerfile
-    assert 'node -e "require(\'./.next/standalone/node_modules/sharp\')"' in dockerfile
+    next_config = (ROOT / "frontend" / "next.config.ts").read_text()
+
+    assert ".next/standalone/node_modules/@img" in dockerfile
+    assert ".next/standalone/node_modules/sharp" in dockerfile
+    assert "test ! -e .next/standalone/node_modules/@img" in dockerfile
+    assert "test ! -e .next/standalone/node_modules/sharp" in dockerfile
+    assert "unoptimized: true" in next_config
 
 
 def test_bicep_uses_ghcr_image_parameters_and_has_no_acr():

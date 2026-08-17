@@ -27,6 +27,8 @@ def _sign_doc(doc: dict) -> dict:
     doc.pop("error_message", None)
     if doc.get("image_urls"):
         doc["image_urls"] = [sign_url(u) for u in doc["image_urls"]]
+    if doc.get("cover_urls"):
+        doc["cover_urls"] = [sign_url(u) for u in doc["cover_urls"]]
     if doc.get("pdf_url"):
         doc["pdf_url"] = sign_url(doc["pdf_url"])
     return doc
@@ -37,6 +39,10 @@ def _sign_summary_doc(doc: dict) -> dict:
     summary.pop("error_message", None)
     cover_urls = summary.get("image_urls") or []
     summary["image_urls"] = [sign_url(cover_urls[0])] if cover_urls else []
+    summary["cover_urls"] = [
+        sign_url(url)
+        for url in summary.get("cover_urls") or []
+    ]
     return summary
 
 
@@ -100,6 +106,7 @@ def list_flipbooks():
             c.page_count,
             c.created_at,
             c.status,
+            c.cover_urls,
             ARRAY_SLICE(c.image_urls, 0, 1) AS image_urls
         FROM c
         ORDER BY c.created_at DESC

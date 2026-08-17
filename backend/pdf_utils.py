@@ -7,6 +7,27 @@ logger = logging.getLogger(__name__)
 POPPLER_PATH = "/opt/homebrew/bin" if os.path.exists("/opt/homebrew/bin") else None
 _PDF_DPI = int(os.getenv("PDF_DPI", "150"))
 _WEBP_QUALITY = int(os.getenv("WEBP_QUALITY", "75"))
+_COVER_WIDTHS = (384, 640)
+
+
+def create_cover_thumbnails(source_path: str, output_dir: str) -> list[str]:
+    """첫 페이지 WebP에서 대시보드용 반응형 표지를 생성한다."""
+    from PIL import Image
+
+    filenames = []
+    with Image.open(source_path) as source:
+        for width in _COVER_WIDTHS:
+            height = max(1, round(source.height * width / source.width))
+            cover = source.resize((width, height), Image.Resampling.LANCZOS)
+            filename = f"cover_{width}.webp"
+            cover.save(
+                os.path.join(output_dir, filename),
+                "WEBP",
+                quality=_WEBP_QUALITY,
+            )
+            filenames.append(filename)
+
+    return filenames
 
 
 def convert_pdf_to_images(pdf_path: str, output_dir: str, dpi: int = _PDF_DPI, split_pages: bool = False) -> list[str]:
