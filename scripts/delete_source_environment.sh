@@ -135,23 +135,31 @@ mapfile -t TARGET_APP_LINES < <(
 )
 (( ${#TARGET_APP_LINES[@]} == 2 )) || refuse "Target Container Apps must include exactly one backend and one frontend."
 
+declare -a TARGET_ACTIVE_REVISIONS=()
 for target_app_line in "${TARGET_APP_LINES[@]}"; do
   IFS=$'\t' read -r app_name service <<<"$target_app_line"
   expected_image="ghcr.io/freeman9844/jjflipbook-azure-${service}:${EXPECTED_GITHUB_SHA}"
-  if ! az containerapp revision list \
-    --subscription "$TARGET_SUBSCRIPTION_ID" \
-    --resource-group "$TARGET_RESOURCE_GROUP" \
-    --name "$app_name" \
-    --output json |
-    jq -e --arg image "$expected_image" '
-      [.[] | select(.properties.active == true)] as $active |
-      ($active | length) == 1 and
-      $active[0].properties.healthState == "Healthy" and
-      $active[0].properties.provisioningState == "Provisioned" and
-      [$active[0].properties.template.containers[]?.image] == [$image]
-    ' >/dev/null; then
+  target_revisions_json="$(
+    az containerapp revision list \
+      --subscription "$TARGET_SUBSCRIPTION_ID" \
+      --resource-group "$TARGET_RESOURCE_GROUP" \
+      --name "$app_name" \
+      --output json
+  )"
+  if ! jq -e --arg image "$expected_image" '
+    [.[] | select(.properties.active == true)] as $active |
+    ($active | length) == 1 and
+    $active[0].properties.healthState == "Healthy" and
+    $active[0].properties.provisioningState == "Provisioned" and
+    [$active[0].properties.template.containers[]?.image] == [$image]
+  ' <<<"$target_revisions_json" >/dev/null; then
     refuse "Target active revision proof failed for ${service}."
   fi
+  TARGET_ACTIVE_REVISIONS+=("$(
+    jq -er '
+      [.[] | select(.properties.active == true)][0].name
+    ' <<<"$target_revisions_json"
+  )")
 done
 
 BACKEND_ID_NAME="$(
@@ -227,9 +235,14 @@ FINAL_REVISION_START="$(
 
 ANALYTICS_QUERY="$(
   cat <<EOF
-      union isfuzzy=true ContainerAppConsoleLogs_CL, ContainerAppSystemLogs_CL
+      union withsource=SourceTable isfuzzy=true ContainerAppConsoleLogs_CL, ContainerAppSystemLogs_CL
       | where TimeGenerated >= datetime(${FINAL_REVISION_START})
       | where Log_s matches regex @'(?i)(error|exception|traceback)'
+      | where not(
+          SourceTable == "ContainerAppSystemLogs_CL" and
+          RevisionName_s in ("${TARGET_ACTIVE_REVISIONS[0]}", "${TARGET_ACTIVE_REVISIONS[1]}") and
+          Log_s == strcat("Error provisioning revision ", RevisionName_s)
+        )
       | count
 EOF
 )"
@@ -238,9 +251,9 @@ ERROR_COUNT="$(
     --subscription "$TARGET_SUBSCRIPTION_ID" \
     --workspace "$TARGET_LOG_WORKSPACE" \
     --analytics-query "$ANALYTICS_QUERY" \
-    --query 'tables[0].rows[0][0]' -o tsv
+    --query '[0].Count' -o tsv
 )"
-[[ "$ERROR_COUNT" == "0" ]] || refuse "Target post-revision error logs must be zero."
+[[ "$ERROR_COUNT" == "0" ]] || refuse "Target post-revision unexplained error logs must be zero."
 
 python3 "$SCRIPT_DIR/subscription_cutover.py" verify-frozen \
   --state-file "$SOURCE_FREEZE_STATE_FILE"

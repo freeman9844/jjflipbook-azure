@@ -159,9 +159,17 @@ def _source_live_app(name, service):
     }
 
 
-def _revision(image, created_time, *, active=True, health="Healthy", provisioning="Provisioned"):
+def _revision(
+    image,
+    created_time,
+    *,
+    name=None,
+    active=True,
+    health="Healthy",
+    provisioning="Provisioned",
+):
     return {
-        "name": image.rsplit("/", 1)[-1].replace(":", "--"),
+        "name": name or image.rsplit("/", 1)[-1].replace(":", "--"),
         "properties": {
             "active": active,
             "createdTime": created_time,
@@ -219,12 +227,14 @@ def _default_az_scenario():
                 _revision(
                     backend_image,
                     "2026-08-17T01:23:45Z",
+                    name="ca-backend-target--000001",
                 )
             ],
             "ca-frontend-target": [
                 _revision(
                     frontend_image,
                     "2026-08-17T01:24:00Z",
+                    name="ca-frontend-target--000001",
                 )
             ],
         },
@@ -436,7 +446,22 @@ if ARGS[:3] == ["monitor", "log-analytics", "query"]:
         fail("Final revision start missing from log query")
     if "(error|exception|traceback)" not in query:
         fail("Error filter missing from log query")
-    if arg_value("--query") != "tables[0].rows[0][0]":
+    if (
+        "union withsource=SourceTable isfuzzy=true" not in query
+        or 'SourceTable == "ContainerAppSystemLogs_CL"' not in query
+        or "Error provisioning revision" not in query
+        or "| where not(" not in query
+    ):
+        fail("Allowed platform provisioning filter missing from log query")
+    for revisions in SCENARIO["target_revisions"].values():
+        revision = next(
+            item["name"]
+            for item in revisions
+            if item["properties"].get("active") is True
+        )
+        if revision not in query:
+            fail(f"Active revision {revision} missing from log query")
+    if arg_value("--query") != "[0].Count":
         fail("Unexpected log analytics output query")
     print(SCENARIO["error_count"])
     raise SystemExit(0)
@@ -1697,7 +1722,7 @@ def test_delete_source_environment_rejects_target_scale_and_revision_failures(
             "no extra target Azure RBAC roles",
         ),
         ({"cosmos_role_count": "0"}, "Cosmos DB data-plane role"),
-        ({"error_count": "3"}, "post-revision error logs"),
+        ({"error_count": "3"}, "post-revision unexplained error logs"),
     ],
 )
 def test_delete_source_environment_rejects_backend_rbac_and_log_failures(

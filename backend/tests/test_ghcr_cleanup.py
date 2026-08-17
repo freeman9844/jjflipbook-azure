@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import urllib.error
@@ -13,11 +14,23 @@ assert SPEC.loader
 SPEC.loader.exec_module(MODULE)
 
 
-def version(version_id, created_at, *tags):
+def version(
+    version_id,
+    created_at,
+    *tags,
+    name=None,
+    referenced_digests=(),
+):
     return {
         "id": version_id,
+        "name": name or f"sha256:{version_id:064x}",
         "created_at": created_at,
-        "metadata": {"container": {"tags": list(tags)}},
+        "metadata": {
+            "container": {
+                "tags": list(tags),
+                "referenced_digests": list(referenced_digests),
+            }
+        },
     }
 
 
@@ -73,6 +86,26 @@ def test_keeps_untagged_version_if_it_is_among_five_newest():
         version(1, "2026-08-01T00:00:00Z", "sha-1"),
     ]
     assert MODULE.version_ids_to_delete(versions, set(), keep=5) == [1]
+
+
+def test_keeps_old_manifest_referenced_by_retained_index():
+    child_digest = "sha256:" + "a" * 64
+    versions = [
+        version(
+            7,
+            "2026-08-07T00:00:00Z",
+            "sha-current",
+            referenced_digests=(child_digest,),
+        ),
+        version(6, "2026-08-06T00:00:00Z"),
+        version(5, "2026-08-05T00:00:00Z"),
+        version(4, "2026-08-04T00:00:00Z"),
+        version(3, "2026-08-03T00:00:00Z"),
+        version(2, "2026-08-02T00:00:00Z"),
+        version(1, "2026-08-01T00:00:00Z", name=child_digest),
+    ]
+
+    assert MODULE.version_ids_to_delete(versions, set(), keep=5) == [2]
 
 
 def test_protected_revision_tags_keeps_all_active_revision_tags(monkeypatch):
@@ -311,6 +344,125 @@ def test_list_package_versions_paginates_until_final_page(monkeypatch):
             "GET",
         ),
     ]
+
+
+def test_main_keeps_manifest_referenced_by_retained_tag(monkeypatch):
+    child_digest = "sha256:" + "a" * 64
+    versions = [
+        version(7, "2026-08-07T00:00:00Z", "sha-current"),
+        version(6, "2026-08-06T00:00:00Z"),
+        version(5, "2026-08-05T00:00:00Z"),
+        version(4, "2026-08-04T00:00:00Z"),
+        version(3, "2026-08-03T00:00:00Z"),
+        version(2, "2026-08-02T00:00:00Z"),
+        version(1, "2026-08-01T00:00:00Z", name=child_digest),
+    ]
+    deleted = []
+    inspected = []
+
+    def fake_run(command, **kwargs):
+        inspected.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps({"manifests": [{"digest": child_digest}]}),
+            stderr="",
+        )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("GITHUB_REPOSITORY_OWNER", "owner")
+    monkeypatch.setenv("AZURE_ENV_NAME", "env")
+    monkeypatch.setattr(MODULE, "PACKAGES", {"backend": "app"})
+    monkeypatch.setattr(MODULE, "find_app_names", lambda resource_group: {"backend": "ca"})
+    monkeypatch.setattr(
+        MODULE,
+        "protected_revision_images",
+        lambda resource_group, app_name: {"ghcr.io/owner/app:sha-current"},
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "list_package_versions",
+        lambda owner, package, token: versions,
+    )
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        MODULE,
+        "delete_package_version",
+        lambda owner, package, version_id, token: deleted.append(version_id),
+    )
+
+    MODULE.main()
+
+    assert inspected == [
+        ["docker", "manifest", "inspect", "ghcr.io/owner/app:sha-current"]
+    ]
+    assert deleted == [2]
+
+
+def test_main_keeps_digest_pinned_revision_manifest_graph(monkeypatch):
+    current_index = "sha256:" + "1" * 64
+    current_child = "sha256:" + "2" * 64
+    pinned_index = "sha256:" + "a" * 64
+    pinned_child = "sha256:" + "b" * 64
+    versions = [
+        version(
+            8,
+            "2026-08-08T00:00:00Z",
+            "sha-current",
+            name=current_index,
+        ),
+        version(7, "2026-08-07T00:00:00Z", name=current_child),
+        version(6, "2026-08-06T00:00:00Z"),
+        version(5, "2026-08-05T00:00:00Z"),
+        version(4, "2026-08-04T00:00:00Z"),
+        version(3, "2026-08-03T00:00:00Z"),
+        version(2, "2026-08-02T00:00:00Z", name=pinned_index),
+        version(1, "2026-08-01T00:00:00Z", name=pinned_child),
+    ]
+    protected_image = f"ghcr.io/owner/app:sha-current@{pinned_index}"
+    deleted = []
+    inspected = []
+
+    def fake_run(command, **kwargs):
+        inspected.append(command)
+        image = command[-1]
+        digest = pinned_child if image.endswith(pinned_index) else current_child
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps({"manifests": [{"digest": digest}]}),
+            stderr="",
+        )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("GITHUB_REPOSITORY_OWNER", "owner")
+    monkeypatch.setenv("AZURE_ENV_NAME", "env")
+    monkeypatch.setattr(MODULE, "PACKAGES", {"backend": "app"})
+    monkeypatch.setattr(MODULE, "find_app_names", lambda resource_group: {"backend": "ca"})
+    monkeypatch.setattr(
+        MODULE,
+        "protected_revision_images",
+        lambda resource_group, app_name: {protected_image},
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "list_package_versions",
+        lambda owner, package, token: versions,
+    )
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        MODULE,
+        "delete_package_version",
+        lambda owner, package, version_id, token: deleted.append(version_id),
+    )
+
+    MODULE.main()
+
+    assert inspected == [
+        ["docker", "manifest", "inspect", "ghcr.io/owner/app:sha-current"],
+        ["docker", "manifest", "inspect", f"ghcr.io/owner/app@{pinned_index}"],
+    ]
+    assert deleted == [3]
 
 
 def test_run_az_propagates_cli_errors(monkeypatch):
