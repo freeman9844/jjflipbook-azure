@@ -130,21 +130,9 @@ def _target_app(name, service):
         "properties": {
             "template": {
                 "scale": {
-                    "rules": [
-                        {
-                            "name": "daily-warm-window",
-                            "custom": {
-                                "type": "cron",
-                                "metadata": {
-                                    "timezone": "Asia/Seoul",
-                                    "start": "55 9 * * *",
-                                    "end": "5 20 * * *",
-                                    "desiredReplicas": "1",
-                                },
-                            },
-                        },
-                        http_rule,
-                    ]
+                    "minReplicas": 1,
+                    "maxReplicas": 2,
+                    "rules": [http_rule],
                 }
             }
         },
@@ -1118,39 +1106,33 @@ def test_bicep_defines_selected_scaling_policy():
     backend_scale = backend_app["properties"]["template"]["scale"]
     frontend_scale = frontend_app["properties"]["template"]["scale"]
     for scale in (backend_scale, frontend_scale):
-        assert scale["minReplicas"] == 0
+        assert scale["minReplicas"] == 1
         assert scale["maxReplicas"] == 2
-        assert scale["cooldownPeriod"] == 60
         assert scale["pollingInterval"] == 30
 
+    assert backend_scale["cooldownPeriod"] == 60
+    assert frontend_scale["cooldownPeriod"] == 300
     assert (
         _find_scale_rule(backend_app, "http-single")["http"]["metadata"][
             "concurrentRequests"
         ]
         == "1"
     )
-    backend_cron_rule = _find_scale_rule(
-        backend_app, "daily-warm-window"
-    )["custom"]
-    assert backend_cron_rule["type"] == "cron"
-    assert backend_cron_rule["metadata"] == {
-        "timezone": "Asia/Seoul",
-        "start": "55 9 * * *",
-        "end": "5 20 * * *",
-        "desiredReplicas": "1",
-    }
+    assert {rule["name"] for rule in backend_scale["rules"]} == {"http-single"}
     assert _find_scale_rule(frontend_app, "http")["http"]["metadata"] == {
         "concurrentRequests": "10"
     }
+    assert {rule["name"] for rule in frontend_scale["rules"]} == {"http"}
 
-    cron_rule = _find_scale_rule(frontend_app, "daily-warm-window")["custom"]
-    assert cron_rule["type"] == "cron"
-    assert cron_rule["metadata"] == {
-        "timezone": "Asia/Seoul",
-        "start": "55 9 * * *",
-        "end": "5 20 * * *",
-        "desiredReplicas": "1",
-    }
+
+def test_bicep_preserves_cosmos_automatic_failover():
+    template = _load_generated_template()
+    cosmos_accounts = _resources_of_type(
+        template, "Microsoft.DocumentDB/databaseAccounts"
+    )
+
+    assert len(cosmos_accounts) == 1
+    assert cosmos_accounts[0]["properties"]["enableAutomaticFailover"] is True
 
 
 def test_backend_excludes_health_from_application_telemetry():

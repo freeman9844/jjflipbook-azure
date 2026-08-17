@@ -1,12 +1,58 @@
 # JJFlipBook Azure 구독 이전 배포 계획
 
-Status: Deployed
+Status: Validated
+Current change: Keep frontend and backend replicas warm for 24-hour login responsiveness
 Mode: Parallel rebuild, verified cutover, source removed
 Source: 8dd0dabf-d8c0-4651-a846-5b13e18e05eb
 Target: 43ab425a-c793-4f2e-b71a-0af7a14f26d2
 Tenant: 1716e63d-ed31-49bf-aa16-5effd27bc340
 Environment/RG: jjflipbook-p2 / rg-jjflipbook-p2
 Location: koreacentral
+
+## Current deployment change
+
+- Goal: eliminate Azure Container Apps cold starts from the complete login path (`frontend -> backend /login -> Cosmos DB`) at all hours.
+- Infrastructure changes:
+  - Set backend `minReplicas` from `0` to `1`.
+  - Set frontend `minReplicas` from `0` to `1`.
+  - Keep both apps at `maxReplicas: 2` with their existing HTTP scale rules.
+  - Remove both redundant `daily-warm-window` cron rules because `minReplicas: 1` supersedes scheduled warming.
+- Recipe: existing AZD + Bicep deployment to subscription `43ab425a-c793-4f2e-b71a-0af7a14f26d2`, resource group `rg-jjflipbook-p2`, location `koreacentral`.
+- Validation: deployment contract test first, Bicep build, backend/frontend tests, `azd provision --preview --no-prompt`, static RBAC review, then target deployment and live scale/revision/endpoint checks.
+- Guardrails: no data, identity, networking, secret, CPU/memory, or `maxReplicas` changes; no source subscription resources remain.
+- Approval: the user explicitly approved the recommended always-warm settings on `2026-08-17`.
+- Preparation proof:
+  - Scaling contract tests passed after first failing against the previous `minReplicas: 0` and cron configuration.
+  - Full backend suite passed: `132 passed, 1 warning`.
+  - Full frontend suite passed: `7` suites and `24` tests.
+  - `infra/main.json` was regenerated successfully from Bicep; only the pre-existing `BCP334` warning remains.
+  - `git diff --check` passed.
+
+### Current validation checklist
+
+- [x] All validation checks pass
+  - [x] AZD installation and authentication
+  - [x] `azure.yaml` schema and environment configuration
+  - [x] Subscription and location match the approved target
+  - [x] Bicep compilation and linting
+  - [x] Provision what-if preview
+  - [x] Backend and frontend build/test verification
+  - [x] Docker build-context and package validation
+  - [x] Static least-privilege role verification
+  - [x] Azure Policy review
+
+### Current validation proof
+
+- AZD `1.31.1` and Azure CLI authentication are valid. The selected environment is `jjflipbook-p2`, subscription `43ab425a-c793-4f2e-b71a-0af7a14f26d2`, tenant `1716e63d-ed31-49bf-aa16-5effd27bc340`, location `koreacentral`, and resource group `rg-jjflipbook-p2`.
+- `azure.yaml` passed the official Azure Developer CLI v1.0 JSON schema fetched from `Azure/azure-dev` at schema SHA `f7a7c9b5895676bdb4d5743737efe53db32e37b6`.
+- `az bicep lint` and `az bicep build` succeeded; generated `infra/main.json` matches the compiled template. Only the pre-existing non-fatal `BCP334` warning remains.
+- The first what-if exposed unrelated live drift (`frontend cooldownPeriod: 300 -> 60` and Cosmos `enableAutomaticFailover: true -> false`). IaC and regression tests were corrected to preserve both live values before validation continued.
+- The final `azd provision --preview --no-prompt` succeeded. Its only explicit operational value changes are backend/frontend `minReplicas: 0 -> 1`; both scale-rule arrays remove `daily-warm-window` while retaining their HTTP rules. Remaining Container Apps container, managed-environment, Cosmos read-only/default, and Application Insights default-property entries are ARM what-if comparison noise rather than requested value changes.
+- Secure validation parameters were supplied only as process-scoped placeholders for what-if, were not written to the AZD environment, and were removed with all temporary validation files.
+- Backend tests passed (`132 passed, 1 warning`), frontend tests passed (`7` suites, `24` tests), Docker contexts are complete and digest-pinned, and `azd package --no-prompt` succeeded for both services using explicit `linux/amd64` image selection on the local arm64 Podman host.
+- Static role review remains least-privilege: backend UAMI has Storage Blob Data Contributor scoped to the Storage account and Cosmos DB Built-in Data Contributor scoped to the Cosmos account; frontend has no managed identity or data-plane role.
+- Azure Policy review found the default Security Center audit initiative and the inherited West Europe restriction. Neither blocks the existing `koreacentral` resources or this scale-only change.
+- `git diff --check` passed.
 
 ## References
 

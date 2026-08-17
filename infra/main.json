@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "9928411715579856865"
+      "templateHash": "16389610915458836115"
     }
   },
   "parameters": {
@@ -103,7 +103,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "4545806533455738928"
+              "templateHash": "7946268151026768351"
             }
           },
           "parameters": {
@@ -286,6 +286,7 @@
                     "name": "EnableServerless"
                   }
                 ],
+                "enableAutomaticFailover": true,
                 "publicNetworkAccess": "Enabled",
                 "disableLocalAuth": true
               }
@@ -474,7 +475,7 @@
                     }
                   ],
                   "scale": {
-                    "minReplicas": 0,
+                    "minReplicas": 1,
                     "maxReplicas": 2,
                     "cooldownPeriod": 60,
                     "pollingInterval": 30,
@@ -484,18 +485,6 @@
                         "http": {
                           "metadata": {
                             "concurrentRequests": "1"
-                          }
-                        }
-                      },
-                      {
-                        "name": "daily-warm-window",
-                        "custom": {
-                          "type": "cron",
-                          "metadata": {
-                            "timezone": "Asia/Seoul",
-                            "start": "55 9 * * *",
-                            "end": "5 20 * * *",
-                            "desiredReplicas": "1"
                           }
                         }
                       }
@@ -594,9 +583,9 @@
                     }
                   ],
                   "scale": {
-                    "minReplicas": 0,
+                    "minReplicas": 1,
                     "maxReplicas": 2,
-                    "cooldownPeriod": 60,
+                    "cooldownPeriod": 300,
                     "pollingInterval": 30,
                     "rules": [
                       {
@@ -604,18 +593,6 @@
                         "http": {
                           "metadata": {
                             "concurrentRequests": "10"
-                          }
-                        }
-                      },
-                      {
-                        "name": "daily-warm-window",
-                        "custom": {
-                          "type": "cron",
-                          "metadata": {
-                            "timezone": "Asia/Seoul",
-                            "start": "55 9 * * *",
-                            "end": "5 20 * * *",
-                            "desiredReplicas": "1"
                           }
                         }
                       }

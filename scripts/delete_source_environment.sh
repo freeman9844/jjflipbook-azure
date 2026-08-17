@@ -115,8 +115,15 @@ if ! jq -e '
   )] as $apps |
   ($apps | length) == 2 and
   all($apps[];
-    ([.properties.template.scale.rules[].name] | index("daily-warm-window")) != null and
-    any(.properties.template.scale.rules[]; has("http"))
+    .properties.template.scale.minReplicas == 1 and
+    .properties.template.scale.maxReplicas == 2 and
+    if .tags["azd-service-name"] == "backend" then
+      ([.properties.template.scale.rules[].name] | sort) == ["http-single"] and
+      .properties.template.scale.rules[0].http.metadata.concurrentRequests == "1"
+    else
+      ([.properties.template.scale.rules[].name] | sort) == ["http"] and
+      .properties.template.scale.rules[0].http.metadata.concurrentRequests == "10"
+    end
   )
 ' <<<"$TARGET_APPS_JSON" >/dev/null; then
   refuse "Target Container Apps must preserve the expected scale rules."

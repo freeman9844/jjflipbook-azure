@@ -114,6 +114,7 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
     capabilities: [
       { name: 'EnableServerless' }
     ]
+    enableAutomaticFailover: true
     publicNetworkAccess: 'Enabled'
     disableLocalAuth: true // AAD(Managed Identity) 인증만 허용 — 키 기반 접근 차단
   }
@@ -242,7 +243,7 @@ resource backendApp 'Microsoft.App/containerApps@2026-01-01' = {
         }
       ]
       scale: {
-        minReplicas: 0
+        minReplicas: 1
         maxReplicas: 2
         cooldownPeriod: 60
         pollingInterval: 30
@@ -252,18 +253,6 @@ resource backendApp 'Microsoft.App/containerApps@2026-01-01' = {
             http: {
               // PDF 변환 OOM 방지: Cloud Run --concurrency=1 대응
               metadata: { concurrentRequests: '1' }
-            }
-          }
-          {
-            name: 'daily-warm-window'
-            custom: {
-              type: 'cron'
-              metadata: {
-                timezone: 'Asia/Seoul'
-                start: '55 9 * * *'
-                end: '5 20 * * *'
-                desiredReplicas: '1'
-              }
             }
           }
         ]
@@ -325,27 +314,15 @@ resource frontendApp 'Microsoft.App/containerApps@2026-01-01' = {
         }
       ]
       scale: {
-        minReplicas: 0
+        minReplicas: 1
         maxReplicas: 2
-        cooldownPeriod: 60
+        cooldownPeriod: 300
         pollingInterval: 30
         rules: [
           {
             name: 'http'
             http: {
               metadata: { concurrentRequests: '10' }
-            }
-          }
-          {
-            name: 'daily-warm-window'
-            custom: {
-              type: 'cron'
-              metadata: {
-                timezone: 'Asia/Seoul'
-                start: '55 9 * * *'
-                end: '5 20 * * *'
-                desiredReplicas: '1'
-              }
             }
           }
         ]
