@@ -313,17 +313,25 @@ def build_freeze_state(
 
 def _checked_state_path(path: str | Path) -> Path:
     state_path = Path(path)
-    if state_path.is_symlink():
-        raise RuntimeError(f"Refusing symlink state path: {state_path}")
+    current = Path(state_path.anchor) if state_path.is_absolute() else Path.cwd()
+    parts = state_path.parts[1:] if state_path.is_absolute() else state_path.parts
+
+    for part in parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            current = current.parent
+            continue
+        current = current / part
+        if current.is_symlink():
+            raise RuntimeError(f"Refusing symlink state path: {current}")
     return state_path
 
 
 def write_json_state(path: str | Path, payload: dict) -> None:
     destination = _checked_state_path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f"{destination.name}.tmp")
-    if temporary.is_symlink():
-        raise RuntimeError(f"Refusing symlink state path: {temporary}")
+    temporary = _checked_state_path(destination.with_name(f"{destination.name}.tmp"))
 
     try:
         with temporary.open("w", encoding="utf-8") as handle:

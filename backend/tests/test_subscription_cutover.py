@@ -209,6 +209,18 @@ def test_write_json_state_rejects_symlink_destination(tmp_path):
         MODULE.write_json_state(symlink, {"schema_version": 1})
 
 
+def test_write_json_state_rejects_symlinked_parent_directory(tmp_path):
+    real_parent = tmp_path / "real-state-dir"
+    real_parent.mkdir()
+    symlink_parent = tmp_path / "state-dir"
+    symlink_parent.symlink_to(real_parent, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        MODULE.write_json_state(
+            symlink_parent / "state.json",
+            {"schema_version": 1, "frozen": False},
+        )
+
 
 def test_write_json_state_uses_sibling_temporary_file_and_replace(monkeypatch, tmp_path):
     destination = tmp_path / "state.json"
@@ -534,6 +546,61 @@ def test_verify_frozen_cli_rejects_state_file_not_marked_frozen(tmp_path):
         MODULE.main(["verify-frozen", "--state-file", str(state_file)])
 
     assert excinfo.value.code == 1
+
+
+def test_restore_cli_rejects_symlinked_parent_state_file(monkeypatch, tmp_path):
+    real_parent = tmp_path / "real-state-dir"
+    real_parent.mkdir()
+    real_state_file = real_parent / "source-freeze.json"
+    real_state_file.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "subscription_id": "source-sub",
+                "resource_group": "rg-source",
+                "frozen": True,
+                "apps": [
+                    {
+                        "service": "backend",
+                        "name": "ca-api-prod",
+                        "ingress": {
+                            "external": False,
+                            "targetPort": 8080,
+                            "transport": "auto",
+                            "allowInsecure": False,
+                        },
+                        "active_revisions": ["ca-api-prod--0000007"],
+                    },
+                    {
+                        "service": "frontend",
+                        "name": "ca-web-prod",
+                        "ingress": {
+                            "external": True,
+                            "targetPort": 3000,
+                            "transport": "auto",
+                            "allowInsecure": True,
+                        },
+                        "active_revisions": ["ca-web-prod--0000008"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    symlink_parent = tmp_path / "state-dir"
+    symlink_parent.symlink_to(real_parent, target_is_directory=True)
+
+    def fail_run_command(_command):
+        raise AssertionError(
+            "restore should reject a symlinked parent before running Azure CLI"
+        )
+
+    monkeypatch.setattr(MODULE, "run_command", fail_run_command)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        MODULE.main(
+            ["restore", "--state-file", str(symlink_parent / "source-freeze.json")]
+        )
 
 
 def test_restore_cli_reactivates_revisions_before_enabling_ingress(
