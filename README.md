@@ -25,10 +25,9 @@ PDF 문서를 업로드하여 웹 브라우저에서 실제 책을 넘기는 듯
 | **Registry / 배포** | **GHCR (GitHub Container Registry) + azd (Azure Developer CLI) + Bicep** 원클릭 |
 | **Identity / Access** | User-Assigned Managed Identity — **Backend:** Cosmos DB Built-in Data Contributor + Storage Blob Data Contributor (ACR Pull ID 불필요) |
 
-- **Frontend / Backend 공통 Warm Window**: 매일 한국 표준시(KST) **09:55부터 20:05까지** KEDA cron 규칙 `daily-warm-window`가 각각 최소 1개의 레플리카를 유지합니다. 그 외 시간에는 `minReplicas: 0`과 HTTP 스케일링으로 Scale-to-Zero가 가능합니다.
-- **Frontend**: HTTP 동시 요청 10개를 기준으로 최대 2개까지 확장합니다. (0.25 vCPU / 0.5 GiB)
-- **Backend**: HTTP 동시 요청 1개를 기준으로 최대 2개까지 확장해 레플리카당 PDF 변환을 1건으로 제한합니다. Warm Window 밖에서 첫 요청이 발생하면 콜드 스타트가 발생할 수 있습니다. (1 vCPU / 2 GiB)
-- 백엔드는 PDF 변환 OOM 방지를 위해 동시 요청 1개로 스케일 (`concurrentRequests: 1`)
+- **24시간 Always-Warm 로그인 경로**: Frontend와 Backend 모두 `minReplicas: 1`로 유지해 로그인 화면과 `/login` API의 Container Apps 콜드 스타트를 제거합니다. 기존 KEDA cron 규칙 `daily-warm-window`는 상시 최소 레플리카와 중복되므로 제거했습니다.
+- **Frontend**: HTTP 동시 요청 10개를 기준으로 `1`개에서 최대 `2`개까지 확장합니다. (0.25 vCPU / 0.5 GiB)
+- **Backend**: HTTP 동시 요청 1개를 기준으로 `1`개에서 최대 `2`개까지 확장해 레플리카당 PDF 변환을 1건으로 제한합니다. (1 vCPU / 2 GiB)
 - Cosmos DB Serverless + Blob LRS — 사용량 기반 과금
 
 ### 배포 구조도
@@ -183,6 +182,9 @@ cd frontend && npx jest
 - **표지 사전 생성**: 첫 페이지에서 384px·640px WebP 표지를 생성해 브라우저가 `srcset`으로 선택 — 런타임 이미지 재변환과 Sharp 의존성 제거
 
 ### Cold Start 및 리소스 구성 최적화
+- **Frontend/Backend 상시 최소 1개**: 로그인 요청의 전체 동기 경로인 `Frontend → Backend /login → Cosmos DB`에서 Container Apps 기동 대기를 제거합니다.
+- **HTTP 자동 확장 유지**: 두 앱 모두 `maxReplicas: 2`와 기존 HTTP 스케일 규칙을 유지하므로 트래픽 증가 시 2개까지 확장되고, 유휴 시에는 1개로 축소됩니다.
+- **Cron 워밍 제거**: `daily-warm-window` KEDA cron 규칙은 `minReplicas: 1`과 기능이 중복되어 사용하지 않습니다.
 - **Lazy Azure 클라이언트**: `database.py`의 Cosmos/Blob 클라이언트는 첫 호출 시점에 초기화 — 모듈 임포트 시 인증 비용 없음
 - **Multi-stage Docker**: builder/runtime 이미지 분리로 이미지 경량화
 - **Startup 경량화**: admin 생성·비밀번호 동기화는 `asyncio.create_task` 백그라운드 실행, 헬스체크(`/healthz`)는 외부 호출 없음
@@ -196,20 +198,21 @@ cd frontend && npx jest
 - **Delegation Key 캐싱**: 8시간 User-Delegation Key를 캐시하고 여유 시간을 두고 재발급 — 각 응답에서는 요청된 개별 Blob에 대해서만 읽기 전용 SAS(2시간 유효)를 새로 서명
 - **로깅 소음 최소화**: Uvicorn 내부의 verbose한 access 로그 출력을 프로덕션 환경에서 비활성화하여 리소스와 I/O 낭비를 막고, 그 대신 **Azure Application Insights의 요청 텔레메트리** 및 **Azure Container Apps(ACA) 시스템 로그**만을 살려 두어 고차원 관측성과 모니터링을 효율적으로 영속합니다.
 
-## 💰 비용 최적화 (Zero-Waste)
+## 💰 비용 · 응답성 균형
 
 | 서비스 | 설정 | 값 | 근거 |
 | --- | --- | --- | --- |
-| Backend | `minReplicas` | `0` | 트래픽 없을 때 스케일 투 제로 (항시 가능) |
-| Backend | `maxReplicas` | `2` | 동시 PDF 변환 상한, 폭주 요금 방지 |
+| Backend | `minReplicas` / `maxReplicas` | `1` / `2` | 로그인·PDF API 콜드 스타트 제거, 동시 PDF 변환 상한 유지 |
 | Backend | `concurrentRequests` | `1` | 레플리카당 PDF 변환 1건 (OOM 방지) |
-| Backend | Warm Window (KST) | `09:55 - 20:05` | 업무 시간대 로그인·PDF API 콜드 스타트 완화 |
+| Backend | KEDA cron | 없음 | 상시 최소 1개 유지와 중복되는 `daily-warm-window` 제거 |
 | Backend | 리소스 | `1vCPU / 2GiB` | PDF 변환 성능 보장 및 변환 시간 단축 |
-| Frontend | `minReplicas` / `maxReplicas` | `0` / `2` | 유휴 시 스케일 투 제로 |
-| Frontend | Warm Window (KST) | `09:55 - 20:05` | 해당 활성 타임존 이외는 `0`개로 스케일 투 제로 |
+| Frontend | `minReplicas` / `maxReplicas` | `1` / `2` | 24시간 빠른 첫 화면과 로그인 프록시 응답 |
+| Frontend | KEDA cron | 없음 | 상시 최소 1개 유지와 중복되는 `daily-warm-window` 제거 |
 | Frontend | 리소스 | `0.25vCPU / 0.5GiB` | Next.js standalone 최적 사양 |
 | Cosmos DB | Serverless | — | 요청 단위 과금, 유휴 시 스토리지 비용만 |
 | Blob Storage | Standard LRS | — | 사용량 기반 과금 |
+
+이 설정은 Scale-to-Zero 비용 절감보다 **24시간 로그인 응답성**을 우선합니다. 기존 KST Warm Window 대비 단순 idle 증분 추정은 Frontend 약 `USD 3.36/월`, Backend 약 `USD 13.45/월`, 합계 약 `USD 16.81/월`이며, Azure 무료 제공량·실제 active 사용량·세금은 제외한 참고값입니다.
 
 ## 🔒 보안 설계
 
@@ -261,13 +264,15 @@ gh variable list | grep -E 'AZURE_(CLIENT_ID|TENANT_ID|SUBSCRIPTION_ID|ENV_NAME|
 # 저장소 변수의 리전이 승인된 값인지 확인
 gh variable list | awk '$1 == "AZURE_LOCATION" { print $2 }' | grep -Fx 'koreacentral'
 
-# 배포된 앱의 이미지, 리비전, KEDA 규칙 확인
+# 배포된 앱의 이미지, 리비전, 최소/최대 레플리카와 스케일 규칙 확인
 AZURE_ENV_NAME="$(gh variable list | awk '$1 == "AZURE_ENV_NAME" { print $2 }')"
 az containerapp list \
   --resource-group "rg-${AZURE_ENV_NAME}" \
-  --query "[].{name:name,revision:properties.latestRevisionName,image:properties.template.containers[0].image,scale:properties.template.scale}" \
+  --query "[].{service:tags.\"azd-service-name\",revision:properties.latestRevisionName,image:properties.template.containers[0].image,minReplicas:properties.template.scale.minReplicas,maxReplicas:properties.template.scale.maxReplicas,rules:properties.template.scale.rules[].name}" \
   -o jsonc
 ```
+
+정상 운영 상태에서는 두 서비스 모두 `minReplicas: 1`, `maxReplicas: 2`이며 Backend 규칙은 `http-single`, Frontend 규칙은 `http`만 표시됩니다. `daily-warm-window`가 나타나면 이전 cron 설정이 남아 있는 상태입니다.
 
 수동 전체 배포는 `validate_only=false`로 실행합니다. 같은 구독/환경 조합의 `main` push와 수동 전체 배포는 workflow concurrency로 직렬화되지만, 운영 관점에서는 Preview 확인과 데이터 동기화가 끝난 뒤 계획된 전체 workflow를 한 번만 실행하는 것을 권장합니다.
 
