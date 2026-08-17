@@ -258,6 +258,9 @@ gh workflow run azure-dev.yml -f validate_only=true
 # 저장소에 설정된 Azure 대상 확인
 gh variable list | grep -E 'AZURE_(CLIENT_ID|TENANT_ID|SUBSCRIPTION_ID|ENV_NAME|LOCATION)'
 
+# 저장소 변수의 리전이 승인된 값인지 확인
+gh variable list | awk '$1 == "AZURE_LOCATION" { print $2 }' | grep -Fx 'koreacentral'
+
 # 배포된 앱의 이미지, 리비전, KEDA 규칙 확인
 AZURE_ENV_NAME="$(gh variable list | awk '$1 == "AZURE_ENV_NAME" { print $2 }')"
 az containerapp list \
@@ -266,7 +269,47 @@ az containerapp list \
   -o jsonc
 ```
 
-수동 전체 배포는 `validate_only=false`로 실행합니다. `main` push와 수동 전체 배포를 동시에 실행하면 동일한 ARM deployment 이름이 충돌할 수 있으므로 한 번에 하나의 실행만 진행합니다.
+수동 전체 배포는 `validate_only=false`로 실행합니다. 같은 구독/환경 조합의 `main` push와 수동 전체 배포는 workflow concurrency로 직렬화되지만, 운영 관점에서는 Preview 확인과 데이터 동기화가 끝난 뒤 계획된 전체 workflow를 한 번만 실행하는 것을 권장합니다.
+
+### 구독 이전 운영 Runbook (승인된 대상)
+
+- 승인된 대상 구독: `43ab425a-c793-4f2e-b71a-0af7a14f26d2`
+- Tenant / 환경 / 리소스 그룹: `1716e63d-ed31-49bf-aa16-5effd27bc340` / `jjflipbook-p2` / `rg-jjflipbook-p2`
+- 대상 리전: `koreacentral`
+- URL 동작: 커스텀 도메인이 없으므로 검증된 cutover 후 운영 URL은 대상 Frontend Container App의 새 `https://<fqdn>`입니다. 원본 URL 유지/재사용은 범위 밖이며, 원본 URL은 삭제 승인 전 rollback 확인용으로만 남깁니다.
+
+```bash
+# GitHub 저장소 변수가 승인된 대상 구독을 가리키는지 확인
+gh variable get AZURE_SUBSCRIPTION_ID --repo freeman9844/jjflipbook-azure
+gh variable list | grep -E 'AZURE_(TENANT_ID|ENV_NAME|LOCATION)'
+
+# 실제 Azure 변경 없이 대상 구독 Preview 실행
+gh workflow run azure-dev.yml \
+  --repo freeman9844/jjflipbook-azure \
+  -f validate_only=true
+
+# 현재 운영 URL과 리비전/스케일 상태 확인
+TARGET_FRONTEND_URL="$(
+  az containerapp list \
+    --subscription 43ab425a-c793-4f2e-b71a-0af7a14f26d2 \
+    --resource-group "rg-jjflipbook-p2" \
+    --query "[?tags.\"azd-service-name\"=='frontend'].properties.configuration.ingress.fqdn | [0]" \
+    -o tsv |
+    sed 's#^#https://#'
+)"
+
+curl --fail --silent --show-error "$TARGET_FRONTEND_URL" >/dev/null
+curl --fail --silent --show-error \
+  "$TARGET_FRONTEND_URL/api/backend/healthz" >/dev/null
+
+az containerapp list \
+  --subscription 43ab425a-c793-4f2e-b71a-0af7a14f26d2 \
+  --resource-group "rg-jjflipbook-p2" \
+  --query "[].{name:name,revision:properties.latestRevisionName,image:properties.template.containers[0].image,scale:properties.template.scale}" \
+  -o jsonc
+```
+
+전체 workflow 배포는 Preview 확인과 데이터 동기화가 끝난 뒤 한 번만 실행합니다. 같은 구독/환경 조합의 자동 push와 수동 배포는 직렬화되어 `resources` ARM deployment와 겹치지 않도록 대기합니다.
 
 ## 📱 모바일 UX
 
