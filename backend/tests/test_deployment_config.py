@@ -1,11 +1,17 @@
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "azure-dev.yml"
+BASH = shutil.which("bash")
+AZURE_TENANT_ID = "1716e63d-ed31-49bf-aa16-5effd27bc340"
+SYNC_BLOBS_SCRIPT = ROOT / "scripts" / "sync_subscription_blobs.sh"
 
 
 def _load_generated_template():
@@ -80,6 +86,182 @@ def _find_scale_rule(app, rule_name):
 
     assert len(matches) == 1
     return matches[0]
+
+
+def _write_fake_azcopy(fake_bin, log_file):
+    fake_azcopy = fake_bin / "azcopy"
+    fake_azcopy.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+
+{{
+  printf 'argv:'
+  for arg in "$@"; do
+    printf ' [%s]' "$arg"
+  done
+  printf '\\n'
+  printf 'AZCOPY_AUTO_LOGIN_TYPE=%s\\n' "${{AZCOPY_AUTO_LOGIN_TYPE-}}"
+  printf 'AZCOPY_TENANT_ID=%s\\n' "${{AZCOPY_TENANT_ID-}}"
+}} >> "{log_file}"
+"""
+    )
+    fake_azcopy.chmod(0o755)
+
+
+def _blob_sync_env(
+    tmp_path,
+    mode,
+    *,
+    with_azcopy=True,
+    env_overrides=None,
+    unset_env=(),
+):
+    workdir = tmp_path / mode
+    fake_bin = workdir / "bin"
+    fake_bin.mkdir(parents=True, exist_ok=True)
+    log_file = workdir / "azcopy.log"
+
+    if with_azcopy:
+        _write_fake_azcopy(fake_bin, log_file)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "AZURE_TENANT_ID": AZURE_TENANT_ID,
+            "SOURCE_STORAGE_ACCOUNT": "sourceaccount",
+            "TARGET_STORAGE_ACCOUNT": "targetaccount",
+            "BLOB_CONTAINER_NAME": "flipbooks",
+        }
+    )
+    if env_overrides:
+        env.update(env_overrides)
+
+    for variable in unset_env:
+        env.pop(variable, None)
+
+    if with_azcopy:
+        env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    else:
+        env["PATH"] = str(fake_bin)
+
+    return env, log_file
+
+
+def _run_blob_sync_result(
+    tmp_path,
+    mode,
+    *,
+    with_azcopy=True,
+    env_overrides=None,
+    unset_env=(),
+):
+    if BASH is None:
+        raise RuntimeError("bash is required for blob sync tests")
+
+    env, log_file = _blob_sync_env(
+        tmp_path,
+        mode,
+        with_azcopy=with_azcopy,
+        env_overrides=env_overrides,
+        unset_env=unset_env,
+    )
+    result = subprocess.run(
+        [BASH, str(SYNC_BLOBS_SCRIPT), mode],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    return result, log_file
+
+
+def _run_blob_sync(
+    tmp_path,
+    mode,
+    *,
+    env_overrides=None,
+    unset_env=(),
+):
+    result, log_file = _run_blob_sync_result(
+        tmp_path,
+        mode,
+        env_overrides=env_overrides,
+        unset_env=unset_env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert log_file.exists()
+    return log_file.read_text()
+
+
+def test_blob_sync_uses_azure_cli_identity_and_final_exact_mirror(tmp_path):
+    initial = _run_blob_sync(tmp_path, "initial")
+    final = _run_blob_sync(tmp_path, "final")
+
+    assert "--from-to=BlobBlob" in initial
+    assert "--recursive=true" in initial
+    assert "--delete-destination=false" in initial
+    assert "--delete-destination=true" in final
+    assert "AZCOPY_AUTO_LOGIN_TYPE=AZCLI" in final
+    assert f"AZCOPY_TENANT_ID={AZURE_TENANT_ID}" in final
+
+
+def test_blob_sync_rejects_invalid_mode(tmp_path):
+    result, log_file = _run_blob_sync_result(tmp_path, "bogus")
+
+    assert result.returncode == 1
+    assert "Mode must be initial or final." in result.stderr
+    assert not log_file.exists()
+
+
+def test_blob_sync_rejects_same_source_and_target_account(tmp_path):
+    result, log_file = _run_blob_sync_result(
+        tmp_path,
+        "initial",
+        env_overrides={
+            "SOURCE_STORAGE_ACCOUNT": "sameaccount",
+            "TARGET_STORAGE_ACCOUNT": "sameaccount",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "Source and target Storage Accounts must differ." in result.stderr
+    assert not log_file.exists()
+
+
+def test_blob_sync_requires_azcopy(tmp_path):
+    result, log_file = _run_blob_sync_result(
+        tmp_path,
+        "initial",
+        with_azcopy=False,
+    )
+
+    assert result.returncode == 1
+    assert "azcopy v10 is required." in result.stderr
+    assert not log_file.exists()
+
+
+@pytest.mark.parametrize(
+    ("unset_env", "expected_error"),
+    [
+        (("AZURE_TENANT_ID",), "AZURE_TENANT_ID is required"),
+        (("SOURCE_STORAGE_ACCOUNT",), "SOURCE_STORAGE_ACCOUNT is required"),
+        (("TARGET_STORAGE_ACCOUNT",), "TARGET_STORAGE_ACCOUNT is required"),
+        (("BLOB_CONTAINER_NAME",), "BLOB_CONTAINER_NAME is required"),
+    ],
+)
+def test_blob_sync_requires_environment_variables(
+    tmp_path,
+    unset_env,
+    expected_error,
+):
+    result, log_file = _run_blob_sync_result(
+        tmp_path,
+        "initial",
+        unset_env=unset_env,
+    )
+
+    assert result.returncode == 1
+    assert expected_error in result.stderr
+    assert not log_file.exists()
 
 
 def test_backend_disables_uvicorn_access_log():
