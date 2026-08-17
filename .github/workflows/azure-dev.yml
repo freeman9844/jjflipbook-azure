@@ -1,19 +1,20 @@
-# Run when commits are pushed to main
+# main 브랜치 변경 시 자동 배포하고, 필요하면 Actions 화면에서 수동 실행한다.
 on:
   workflow_dispatch:
     inputs:
+      # true이면 이미지 빌드와 인프라 미리 보기까지만 수행하고 실제 Azure 변경은 건너뛴다.
       validate_only:
-        description: Preview infrastructure changes without provisioning
+        description: 실제 배포 없이 인프라 변경 사항만 미리 확인
         required: false
         type: boolean
         default: false
   push:
-    # Run when commits are pushed to mainline branch (main or master)
-    # Set this to the mainline branch you are using
+    # 운영 배포 기준 브랜치를 main으로 제한한다.
     branches:
       - main
 
-# Set up permissions for deploying with secretless Azure federated credentials
+# 장기 Azure 자격 증명 없이 GitHub OIDC 토큰으로 로그인하기 위한 최소 권한이다.
+# packages: write는 빌드한 컨테이너 이미지를 GHCR에 게시할 때 사용한다.
 # https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure?tabs=azure-portal%2Clinux#set-up-azure-login-with-openid-connect-authentication
 permissions:
   contents: read
@@ -24,6 +25,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # 일반 설정은 GitHub Variables, 민감한 값은 각 단계의 Secrets로 주입한다.
+    # 이미지 태그에 commit SHA를 사용해 배포 버전을 변경 불가능하게 식별한다.
     env:
       AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
@@ -33,9 +36,11 @@ jobs:
       BACKEND_IMAGE: ghcr.io/freeman9844/jjflipbook-azure-backend:${{ github.sha }}
       FRONTEND_IMAGE: ghcr.io/freeman9844/jjflipbook-azure-frontend:${{ github.sha }}
     steps:
+      # 소스와 Azure Developer CLI, 멀티 플랫폼 Docker 빌드 환경을 준비한다.
       - name: Checkout
         uses: actions/checkout@v5
       - name: Export smoke attestation path
+        # smoke test 성공 증명 파일은 저장소가 아닌 Runner 임시 경로에 둔다.
         run: echo "SMOKE_ATTESTATION_FILE=$RUNNER_TEMP/jjflipbook-smoke-attestation.json" >> "$GITHUB_ENV"
       - name: Install azd
         uses: Azure/setup-azd@v2.3.0
@@ -47,6 +52,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Backend와 Frontend를 linux/amd64로 빌드하고 서비스별 BuildKit 캐시를 사용한다.
       - name: Build and push backend image
         uses: docker/build-push-action@v6
         with:
@@ -67,11 +73,13 @@ jobs:
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
           tags: ${{ env.FRONTEND_IMAGE }}
+      # Azure가 인증 없이 이미지를 가져갈 수 있도록 GHCR 공개 접근을 사전에 검증한다.
       - name: Verify images are public
         run: |
           docker logout ghcr.io
           docker manifest inspect "$BACKEND_IMAGE" >/dev/null
           docker manifest inspect "$FRONTEND_IMAGE" >/dev/null
+      # az CLI와 azd는 인증 상태를 별도로 관리하므로 동일한 OIDC 정보로 각각 로그인한다.
       - name: Log in to Azure CLI
         uses: azure/login@v2
         with:
@@ -86,12 +94,14 @@ jobs:
             --tenant-id "$Env:AZURE_TENANT_ID"
         shell: pwsh
 
+      # 실제 배포 전 Bicep what-if 결과를 생성한다. validate_only 실행은 여기서 종료된다.
       - name: Preview infrastructure changes
         run: azd provision --preview --no-prompt
         env:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+      # 수동 검증 전용 실행이 아닌 경우에만 현재 Bicep 구성을 Azure에 반영한다.
       - name: Provision optimized infrastructure
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
         run: azd provision --no-prompt
@@ -99,9 +109,12 @@ jobs:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+      # 새 이미지의 단일 Healthy 리비전으로 트래픽이 완전히 전환될 때까지 기다린다.
+      # 이 단계는 전환 중인 구형 리비전을 smoke test가 호출하는 경쟁 상태를 방지한다.
       - name: Wait for revision convergence
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
         run: bash scripts/wait_for_revision_convergence.sh
+      # azd-service-name 태그가 frontend인 앱이 정확히 하나인지 확인하고 공개 URL을 저장한다.
       - name: Resolve frontend URL
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
         run: |
@@ -114,6 +127,7 @@ jobs:
             exit 1
           fi
           echo "FRONTEND_URL=https://${frontend_fqdns[0]}" >> "$GITHUB_ENV"
+      # 로그인, 목록, PDF 업로드·조회·삭제까지 운영 경로를 종단 간 검증한다.
       - name: Smoke test deployment
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
         run: |
@@ -121,12 +135,14 @@ jobs:
           SMOKE_ATTESTATION_FILE="$SMOKE_ATTESTATION_FILE" \
           ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}" \
           bash scripts/smoke_test_deployment.sh
+      # smoke test 성공 증명과 새 리비전 수렴이 확인된 후에만 레거시 Azure 리소스를 삭제한다.
       - name: Clean up legacy Azure resources
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
         run: |
           FRONTEND_URL="$FRONTEND_URL" \
           SMOKE_ATTESTATION_FILE="$SMOKE_ATTESTATION_FILE" \
           bash scripts/cleanup_legacy_azure_resources.sh
+      # 현재 환경에서 사용 중인 이미지와 최근 버전은 유지하고 오래된 GHCR 버전을 정리한다.
       - name: Clean up GHCR versions
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
         run: python3 scripts/cleanup_ghcr_versions.py
