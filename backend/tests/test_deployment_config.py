@@ -327,6 +327,7 @@ def test_workflow_supports_preview_only_manual_runs():
     )
     for step_name in (
         "Provision optimized infrastructure",
+        "Wait for revision convergence",
         "Resolve frontend URL",
         "Smoke test deployment",
         "Clean up legacy Azure resources",
@@ -393,9 +394,11 @@ def test_workflow_requires_public_gate_before_azure_auth_and_direct_az_use():
 
 def test_workflow_wires_smoke_and_legacy_cleanup_with_shared_environment():
     workflow = _load_workflow()
+    convergence_step = _workflow_step(workflow, "Wait for revision convergence")
     smoke_step = _workflow_step(workflow, "Smoke test deployment")
     legacy_cleanup_step = _workflow_step(workflow, "Clean up legacy Azure resources")
 
+    assert "bash scripts/wait_for_revision_convergence.sh" in convergence_step
     shared_assignments = (
         'FRONTEND_URL="$FRONTEND_URL"',
         'SMOKE_ATTESTATION_FILE="$SMOKE_ATTESTATION_FILE"',
@@ -409,6 +412,7 @@ def test_workflow_wires_smoke_and_legacy_cleanup_with_shared_environment():
     _assert_in_order(
         workflow,
         "      - name: Provision optimized infrastructure\n",
+        "      - name: Wait for revision convergence\n",
         "      - name: Resolve frontend URL\n",
         "      - name: Smoke test deployment\n",
         "      - name: Clean up legacy Azure resources\n",
@@ -487,3 +491,67 @@ fi
 
     assert result.returncode == 0, result.stderr
     assert counter.read_text() == "2"
+
+
+def test_revision_gate_waits_for_exact_healthy_images(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    backend_counter = tmp_path / "backend-calls"
+    fake_az = fake_bin / "az"
+    fake_az.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$1 $2" == "containerapp list" ]]; then
+  printf '%s\n' '[{{"name":"ca-backend","tags":{{"azd-service-name":"backend"}}}},{{"name":"ca-frontend","tags":{{"azd-service-name":"frontend"}}}}]'
+elif [[ "$1 $2 $3" == "containerapp revision list" ]]; then
+  app=""
+  while (( $# > 0 )); do
+    if [[ "$1" == "--name" ]]; then
+      app="$2"
+      break
+    fi
+    shift
+  done
+  if [[ "$app" == "ca-backend" ]]; then
+    calls=0
+    [[ -f "{backend_counter}" ]] && calls="$(cat "{backend_counter}")"
+    calls=$((calls + 1))
+    printf '%s' "$calls" > "{backend_counter}"
+    if (( calls == 1 )); then
+      printf '%s\n' '[{{"properties":{{"active":true,"healthState":"Healthy","provisioningState":"Provisioned","template":{{"containers":[{{"image":"ghcr.io/freeman9844/backend:old"}}]}}}}}},{{"properties":{{"active":true,"healthState":"Healthy","provisioningState":"Provisioned","template":{{"containers":[{{"image":"ghcr.io/freeman9844/backend:new"}}]}}}}}}]'
+    else
+      printf '%s\n' '[{{"properties":{{"active":true,"healthState":"Healthy","provisioningState":"Provisioned","template":{{"containers":[{{"image":"ghcr.io/freeman9844/backend:new"}}]}}}}}}]'
+    fi
+  else
+    printf '%s\n' '[{{"properties":{{"active":true,"healthState":"Healthy","provisioningState":"Provisioned","template":{{"containers":[{{"image":"ghcr.io/freeman9844/frontend:new"}}]}}}}}}]'
+  fi
+else
+  printf 'Unexpected az invocation: %s\n' "$*" >&2
+  exit 2
+fi
+"""
+    )
+    fake_az.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "AZURE_ENV_NAME": "jjflipbook",
+            "BACKEND_IMAGE": "ghcr.io/freeman9844/backend:new",
+            "FRONTEND_IMAGE": "ghcr.io/freeman9844/frontend:new",
+            "REVISION_VERIFY_ATTEMPTS": "2",
+            "REVISION_VERIFY_DELAY_SECONDS": "0",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "wait_for_revision_convergence.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert backend_counter.read_text() == "2"

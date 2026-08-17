@@ -99,6 +99,9 @@ jobs:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+      - name: Wait for revision convergence
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
+        run: bash scripts/wait_for_revision_convergence.sh
       - name: Resolve frontend URL
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
         run: |
