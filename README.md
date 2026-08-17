@@ -25,8 +25,9 @@ PDF 문서를 업로드하여 웹 브라우저에서 실제 책을 넘기는 듯
 | **Registry / 배포** | **GHCR (GitHub Container Registry) + azd (Azure Developer CLI) + Bicep** 원클릭 |
 | **Identity / Access** | User-Assigned Managed Identity — **Backend:** Cosmos DB Built-in Data Contributor + Storage Blob Data Contributor (ACR Pull ID 불필요) |
 
-- **Frontend**: 매일 한국 표준시(KST) **09:55부터 20:05까지** 최소 1개의 레플리카가 Warm 상태로 유지되며, 그 외 시간대에는 `0`으로 스케일 투 제로(Scale-to-Zero)되어 유휴 비용을 최소화합니다. (Frontend 사양: 0.25 vCPU / 0.5 GiB)
-- **Backend**: 항상 `minReplicas: 0`으로 **스케일 투 제로** 상태로 동작하며, 유휴 시 비용이 전혀 발생하지 않습니다. 단, 로그인, 목록 조회, 대용량 PDF 업로드 등 모든 API 요청 시점에 콜드 스타트(Cold Start)가 발생할 수 있습니다. (Backend 사양: 1 vCPU / 2 GiB)
+- **Frontend / Backend 공통 Warm Window**: 매일 한국 표준시(KST) **09:55부터 20:05까지** KEDA cron 규칙 `daily-warm-window`가 각각 최소 1개의 레플리카를 유지합니다. 그 외 시간에는 `minReplicas: 0`과 HTTP 스케일링으로 Scale-to-Zero가 가능합니다.
+- **Frontend**: HTTP 동시 요청 10개를 기준으로 최대 2개까지 확장합니다. (0.25 vCPU / 0.5 GiB)
+- **Backend**: HTTP 동시 요청 1개를 기준으로 최대 2개까지 확장해 레플리카당 PDF 변환을 1건으로 제한합니다. Warm Window 밖에서 첫 요청이 발생하면 콜드 스타트가 발생할 수 있습니다. (1 vCPU / 2 GiB)
 - 백엔드는 PDF 변환 OOM 방지를 위해 동시 요청 1개로 스케일 (`concurrentRequests: 1`)
 - Cosmos DB Serverless + Blob LRS — 사용량 기반 과금
 
@@ -77,10 +78,17 @@ azd env set ADMIN_PASSWORD '<관리자 비밀번호>'
 azd env set INTERNAL_API_KEY '<내부 API 키>'
 azd env set SESSION_SECRET '<세션 서명 키>'
 
+# 배포할 불변 GHCR 이미지 지정
+azd env set BACKEND_IMAGE 'ghcr.io/freeman9844/jjflipbook-azure-backend:<commit-sha>'
+azd env set FRONTEND_IMAGE 'ghcr.io/freeman9844/jjflipbook-azure-frontend:<commit-sha>'
+
 azd provision     # 인프라 프로비저닝 및 GHCR 이미지 기반 배포 수행
 ```
 
-`azd provision` 완료 후 출력되는 `FRONTEND_URL`로 접속합니다. (최초 관리자 계정: `admin` / 설정한 `ADMIN_PASSWORD`)
+일반 운영 배포에는 이미지 빌드부터 smoke test까지 포함하는 GitHub Actions 사용을 권장합니다.
+로컬 `azd provision`은 이미 GHCR에 게시된 Backend/Frontend commit-SHA 이미지가 있을 때 사용합니다.
+
+`azd provision` 완료 후 출력되는 `FRONTEND_URL`로 접속합니다. (관리자 계정: `admin` / 설정한 `ADMIN_PASSWORD`)
 이번 보안 하드닝 배포 이후에는 기존 로그인 세션이 모두 무효화되므로 다시 로그인해야 합니다.
 
 ### GHCR 최초 마이그레이션 주의사항 (Public Gate)
@@ -92,9 +100,9 @@ azd provision     # 인프라 프로비저닝 및 GHCR 이미지 기반 배포 �
 | --- | --- | --- |
 | `COSMOS_ENDPOINT` / `COSMOS_DB_NAME` | Backend | Cosmos DB 엔드포인트 / DB 이름(`jjflipbook`) |
 | `STORAGE_ACCOUNT_NAME` / `BLOB_CONTAINER_NAME` | Backend | Blob 계정 / 컨테이너(`flipbook-assets`) |
-| `NEXT_PUBLIC_BACKEND_URL` | Frontend (빌드 ARG) | 백엔드 엔드포인트 (정적 JS에 반영) |
+| `NEXT_PUBLIC_BACKEND_URL` | Frontend (런타임) | Container Apps 환경 내부의 백엔드 URL. 브라우저 번들이 아니라 Next.js 서버 프록시와 뮤직 API가 요청 시 읽음 |
 | `INTERNAL_API_KEY` | Backend + Frontend | FE → BE 내부 API 인증 키 (양쪽 동일) |
-| `ADMIN_PASSWORD` | Backend | 초기 관리자 계정 시딩 비밀번호 |
+| `ADMIN_PASSWORD` | Backend | 관리자 비밀번호의 기준값. 시작 시 admin 문서가 없으면 생성하고 기존 해시와 다르면 안전하게 동기화 |
 | `SESSION_SECRET` | Frontend | HMAC-SHA256 기반 8시간 `auth_token` 세션 서명 키 (production에서는 32자 이상 필수) |
 | `FRONTEND_URL` | Backend | CORS 허용 도메인 (Bicep이 자동 계산) |
 
@@ -130,6 +138,8 @@ cd frontend && npx jest
 
 ```text
 ├── azure.yaml                     # azd 서비스 정의 (GHCR 기반 이미지 지정)
+├── .github/workflows/
+│   └── azure-dev.yml              # GHCR 빌드, OIDC 인증, preview, 배포, smoke test
 ├── infra/
 │   ├── main.bicep                 # 구독 스코프 진입점 (RG + 태그)
 │   ├── resources.bicep            # ACA/Cosmos/Blob/MI/역할 할당 전체
@@ -144,6 +154,11 @@ cd frontend && npx jest
 │   ├── services/flipbook_service.py  # PDF 변환 업로드 + 연쇄 삭제 핵심 로직
 │   ├── scripts/cleanup_test_data.py  # 테스트 더미 데이터 정화 스크립트
 │   └── tests/                     # 오프라인 단위 테스트 (Azure mock)
+├── scripts/
+│   ├── wait_for_revision_convergence.sh  # 정확한 SHA 이미지의 Healthy 리비전 전환 대기
+│   ├── smoke_test_deployment.sh           # 로그인·목록·업로드·조회·삭제 종단 간 검증
+│   ├── cleanup_legacy_azure_resources.sh  # smoke 성공 증명 후 레거시 리소스 정리
+│   └── cleanup_ghcr_versions.py           # 운영/롤백 이미지 보호 후 GHCR 버전 정리
 └── frontend/
     ├── src/app/
     │   ├── page.tsx               # 대시보드 (폴더/플립북 관리)
@@ -170,7 +185,7 @@ cd frontend && npx jest
 ### Cold Start 및 리소스 구성 최적화
 - **Lazy Azure 클라이언트**: `database.py`의 Cosmos/Blob 클라이언트는 첫 호출 시점에 초기화 — 모듈 임포트 시 인증 비용 없음
 - **Multi-stage Docker**: builder/runtime 이미지 분리로 이미지 경량화
-- **Startup 경량화**: admin 시딩은 `asyncio.create_task` 백그라운드 실행, 헬스체크(`/`)는 외부 호출 없음
+- **Startup 경량화**: admin 생성·비밀번호 동기화는 `asyncio.create_task` 백그라운드 실행, 헬스체크(`/healthz`)는 외부 호출 없음
 - **Lazy import**: `pdf2image`는 실제 변환 시점에만 임포트
 - **Frontend 리소스**: 0.25 vCPU / 0.5 GiB로 가볍고 슬림한 Next.js standalone 호스팅 보장
 - **Backend 리소스**: 1 vCPU / 2 GiB 할당으로 넉넉한 CPU 및 메모리 대역폭을 통한 대용량 PDF 변환 최적성 보장
@@ -188,6 +203,7 @@ cd frontend && npx jest
 | Backend | `minReplicas` | `0` | 트래픽 없을 때 스케일 투 제로 (항시 가능) |
 | Backend | `maxReplicas` | `2` | 동시 PDF 변환 상한, 폭주 요금 방지 |
 | Backend | `concurrentRequests` | `1` | 레플리카당 PDF 변환 1건 (OOM 방지) |
+| Backend | Warm Window (KST) | `09:55 - 20:05` | 업무 시간대 로그인·PDF API 콜드 스타트 완화 |
 | Backend | 리소스 | `1vCPU / 2GiB` | PDF 변환 성능 보장 및 변환 시간 단축 |
 | Frontend | `minReplicas` / `maxReplicas` | `0` / `2` | 유휴 시 스케일 투 제로 |
 | Frontend | Warm Window (KST) | `09:55 - 20:05` | 해당 활성 타임존 이외는 `0`개로 스케일 투 제로 |
@@ -204,7 +220,7 @@ cd frontend && npx jest
 - **Defender for Storage 미적용**: 과도한 고정 비용을 발생시키는 클라우드 수준의 Defender for Storage를 **이 애플리케이션의 Storage Account에 한해서만 명시적으로 비활성화**하여 최적의 저비용 구조를 실현했습니다.
 - **Cosmos AAD 전용 인증**: `disableLocalAuth: true`로 키 기반 접근 차단, Managed Identity(AAD)만 허용
 - **Blob Soft Delete(7일)**: 실수로 삭제된 Blob 복구 안전망
-- **Managed Identity 최소 권한**: Backend ID에 Cosmos DB Built-in Data Contributor 및 Storage Blob Data Contributor만을 한정 부여하여 보안을 극대화(Frontend ID에는 권한 축소)
+- **Managed Identity 최소 권한**: Backend 전용 User-Assigned Managed Identity에 Cosmos DB Built-in Data Contributor와 Storage Blob Data Contributor만 부여합니다. Frontend에는 Azure Managed Identity를 연결하지 않습니다.
 - **서명 세션**: 프론트엔드는 로그인 성공 시 `username` / `iat` / `exp` / `nonce` 페이로드를 HMAC-SHA256으로 서명한 8시간짜리 `HttpOnly` 쿠키를 발급하며, 이번 배포 후 기존 세션은 모두 무효화됨
 - **시크릿 관리(Fail Closed)**: `ADMIN_PASSWORD` / `INTERNAL_API_KEY` / `SESSION_SECRET`은 `azd env set` → Bicep `@secure()` 파라미터 → Container Apps secret으로 주입. Production에는 fallback이 없으며 값이 없거나 레거시 기본값이면 앱 시작 시 즉시 실패
 - **패스워드 암호화**: bcrypt 해싱, `HttpOnly` 쿠키로 XSS 세션 탈취 차단
@@ -218,18 +234,39 @@ cd frontend && npx jest
 
 ## 🔄 CI/CD (GitHub Actions)
 
-GitHub Actions 워크플로우(`main` 브랜치 push 시 자동 실행)를 통해 다음 단계로 무중단 배포 및 관리가 수행됩니다:
+GitHub Actions 워크플로우는 `main` 브랜치 push 시 자동 실행되며, Actions 화면에서 수동 실행할 수도 있습니다.
 
-1. **빌드 및 푸시 (GHCR SHA Tag)**: GitHub Actions가 소스코드를 기반으로 Docker 이미지를 빌드하고, 커밋 SHA 값(`commit-SHA`)을 태그로 지정하여 **GHCR (GitHub Container Registry)** 공개 패키지에 푸시합니다.
-2. **미리보기 및 검증 (Preview)**: 새로 푸시된 불변(Immutable) 이미지 태그를 바탕으로 스테이징/미리보기 배포 및 유효성 검증을 거칩니다.
-3. **프로비저닝 (azd provision)**: `azd deploy`를 호출하는 대신, 인프라 변경사항 반영 및 새로 빌드된 커밋 SHA 이미지 배포를 `azd provision` 단일 단계로 실행하여 인프라와 컨테이너 구성을 동기화합니다.
-4. **스모크 테스트 (Smoke Test)**: 배포 완료 후 핵심 기능 동작(로그인, 파일 변환 등)에 대한 스모크 테스트를 실행하여 정상 동작을 확인합니다.
-5. **정리 및 정리 정책 (Cleanup)**: GHCR 패키지 저장 공간 및 비용 최적화를 위해 정리 자동화가 실행됩니다. 이 정책은 **가장 최신의 5개 패키지 버전**과 **현재 가동 중인 최신 2개의 Azure Container Apps(ACA) 리비전이 참조하고 있는 태그 및 버전**을 안전하게 보존(Retention)하고, 그 외 오래된 이미지들을 삭제합니다.
+1. **불변 이미지 빌드**: Backend와 Frontend를 `linux/amd64`로 빌드하고 commit SHA를 태그로 사용해 GHCR에 게시합니다.
+2. **Public Gate**: GHCR 로그아웃 후 두 이미지의 manifest를 익명 조회하여 Azure Container Apps가 인증 없이 pull할 수 있는지 확인합니다.
+3. **Secretless Azure 인증**: `azure/login`과 `azd auth login`이 동일한 GitHub OIDC federated credential로 각각 로그인합니다. 클라이언트 시크릿은 저장하지 않습니다.
+4. **인프라 Preview**: 모든 실행에서 `azd provision --preview`를 먼저 수행합니다. 수동 실행 입력 `validate_only=true`이면 실제 프로비저닝과 이후 단계는 건너뜁니다.
+5. **프로비저닝 및 리비전 수렴**: `azd provision`으로 Bicep과 commit-SHA 이미지를 함께 반영한 뒤, Backend와 Frontend가 각각 해당 이미지의 단일 `Healthy` 리비전으로 전환될 때까지 기다립니다.
+6. **Smoke Test**: 공개 Frontend를 통해 로그인, 목록 조회, PDF 업로드·상세 조회·삭제를 검증합니다. 성공 증명 파일이 생성되어야 정리 단계가 실행됩니다.
+7. **안전한 Cleanup**: smoke 성공 후 레거시 Azure 리소스를 정리합니다. GHCR에서는 최신 5개 버전, 현재 활성 리비전 태그, 그리고 가장 최근의 사용 가능한 롤백 리비전 태그를 보호한 뒤 나머지를 삭제합니다.
 
-- **인증**: Azure 관리 ID(`msi-jjflipbook-azure`) + GitHub OIDC **federated credentials** — 저장소에 클라이언트 시크릿 없음
+- **인증 주체**: 대상 Microsoft Entra Tenant의 App Registration / Service Principal + GitHub OIDC federated credential
 - **저장소 변수**: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_ENV_NAME`, `AZURE_LOCATION`
 - **저장소 시크릿**: `ADMIN_PASSWORD`, `INTERNAL_API_KEY`, `SESSION_SECRET` (Bicep `@secure()` 파라미터로 전달)
-- 참고: GitHub OIDC의 새 subject 형식(`repo:owner@id/repo@id:...`)을 사용하는 경우, 관리 ID에 해당 형식의 federated credential이 추가로 등록되어 있어야 합니다
+- **OIDC subject 주의**: GitHub가 `repo:owner@id/repo@id:ref:refs/heads/main` 형식의 assertion을 발급하는 저장소에서는 Entra federated credential의 subject도 정확히 같은 형식이어야 합니다.
+
+### 수동 Preview와 배포 상태 확인
+
+```bash
+# 실제 Azure 변경 없이 이미지 빌드와 Bicep preview까지만 실행
+gh workflow run azure-dev.yml -f validate_only=true
+
+# 저장소에 설정된 Azure 대상 확인
+gh variable list | grep -E 'AZURE_(CLIENT_ID|TENANT_ID|SUBSCRIPTION_ID|ENV_NAME|LOCATION)'
+
+# 배포된 앱의 이미지, 리비전, KEDA 규칙 확인
+AZURE_ENV_NAME="$(gh variable list | awk '$1 == "AZURE_ENV_NAME" { print $2 }')"
+az containerapp list \
+  --resource-group "rg-${AZURE_ENV_NAME}" \
+  --query "[].{name:name,revision:properties.latestRevisionName,image:properties.template.containers[0].image,scale:properties.template.scale}" \
+  -o jsonc
+```
+
+수동 전체 배포는 `validate_only=false`로 실행합니다. `main` push와 수동 전체 배포를 동시에 실행하면 동일한 ARM deployment 이름이 충돌할 수 있으므로 한 번에 하나의 실행만 진행합니다.
 
 ## 📱 모바일 UX
 
@@ -252,7 +289,7 @@ Blob 컨테이너의 공개 접근을 차단할 수 있습니다. 이 저장소�
   exact-blob read-only User-Delegation SAS URL을 통해 이루어집니다
   (컨테이너 공개 접근 불필요).
 
-또한 `azure.yaml`의 `remoteBuild: true` 설정을 사용하는 대신 GitHub Actions 워크플로우를 사용한 빌드를 지향합니다.
+또한 `azure.yaml`에서 소스 원격 빌드를 사용하지 않고, GitHub Actions가 미리 빌드해 GHCR에 게시한 commit-SHA 이미지를 `azd provision`에 전달합니다.
 
 - **긴 PDF 변환**: 업로드 요청이 변환을 동기 대기합니다. Container Apps ingress의
   요청 타임아웃(약 240초)을 초과하는 대형 PDF는 클라이언트에서 타임아웃될 수 있습니다.
